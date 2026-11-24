@@ -189,7 +189,7 @@ export class MeshDeformer {
   }
 
   /** Bind a mesh (positions already in car-local rest space) to a deform group. */
-  bind(mesh: Mesh, group: number, restLocal: Float64Array): DeformBinding {
+  bind(mesh: Mesh, group: number, restLocal: Float32Array): DeformBinding {
     const geo = mesh.geometry as BufferGeometry;
     ensurePlainAttributes(geo);
     if (!geo.getAttribute('normal')) geo.computeVertexNormals();
