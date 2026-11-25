@@ -27,7 +27,7 @@ export function MainMenu({
 
   return (
     <div className="bng-menu-backdrop" role="dialog" aria-label="FlexWeb Main Menu">
-      {/* Subtle left-side readability vignette — keeps live 3D crash videos 100% visible behind the menu */}
+      {/* Subtle left-side readability vignette — keeps live 3D crash showcase 100% visible behind the menu */}
       <div className="bng-slideshow-layer" aria-hidden="true">
         <div className="bng-menu-vignette" />
       </div>
@@ -42,22 +42,22 @@ export function MainMenu({
                 FLEXWEB
               </h1>
               <p className="bng-logo-sub">
-                Moteur de déformation temps réel · Véhicule actif : <strong>{activeCarName}</strong>
+                Real-Time Soft-Body Crash Engine · Active Vehicle: <strong>{activeCarName}</strong>
               </p>
             </div>
 
-            <nav className="bng-main-actions" aria-label="Menu Principal">
+            <nav className="bng-main-actions" aria-label="Main Menu">
               <button id="menu-play-btn" type="button" className="bng-nav-btn primary" onClick={onOpenMaps}>
                 <span className="bng-nav-title">PLAY</span>
-                <span className="bng-nav-desc">Choisir une carte et lancer la simulation</span>
+                <span className="bng-nav-desc">Select a map and launch the simulation</span>
               </button>
               <button id="menu-cars-btn" type="button" className="bng-nav-btn" onClick={onOpenCars}>
                 <span className="bng-nav-title">CARS</span>
-                <span className="bng-nav-desc">Showroom blanc, peintures carrosserie &amp; fiches techniques</span>
+                <span className="bng-nav-desc">Studio showroom, live body paints &amp; vehicle specs</span>
               </button>
               <button id="menu-settings-btn-main" type="button" className="bng-nav-btn" onClick={onOpenSettings}>
                 <span className="bng-nav-title">SETTINGS</span>
-                <span className="bng-nav-desc">Conduite, Audio moteur Web Audio &amp; Graphismes 60 FPS</span>
+                <span className="bng-nav-desc">Controls, Web Audio engine sound &amp; 60 FPS graphics</span>
               </button>
             </nav>
 
@@ -70,11 +70,11 @@ export function MainMenu({
         <div className="bng-modal-shell">
           <div className="bng-modal-header">
             <div>
-              <span className="bng-eyebrow">SÉLECTION DE CARTE</span>
-              <h2 className="bng-modal-title">Choisir un environnement</h2>
+              <span className="bng-eyebrow">MAP SELECTION</span>
+              <h2 className="bng-modal-title">Choose an Environment</h2>
             </div>
             <button type="button" className="btn btn-menu" onClick={onBackHome}>
-              ← Retour
+              ← Back
             </button>
           </div>
 
@@ -85,18 +85,18 @@ export function MainMenu({
                 {mapThumb ? (
                   <img src={mapThumb} alt="Crash Test Arena" />
                 ) : (
-                  <div className="bng-map-placeholder arena">GRIDMAP 400m × 400m</div>
+                  <div className="bng-map-placeholder arena">PROVING GROUND 2 km × 2 km</div>
                 )}
-                <span className="bng-map-tag ready">DISPONIBLE</span>
+                <span className="bng-map-tag ready">PLAYABLE</span>
               </div>
               <div className="bng-map-body">
                 <h3>Crash Test Arena</h3>
                 <p>
-                  Arène GridMap 400×400 m : barrières NCAP, presse hydraulique cabine, double tremplin,
-                  pistes de suspension Flexbody, poteaux, hangars solides et 9 scénarios.
+                  2 km × 2 km Proving Ground: 500 m NCAP radar runway, double hydraulic press, pendulum hammers,
+                  crusher rollers, suspension &amp; 25° banked circuit, mega-ramp canyon, and industrial roundabout.
                 </p>
                 <div className="bng-map-meta">
-                  <span>Véhicule : <strong>{activeCarName}</strong></span>
+                  <span>Vehicle: <strong>{activeCarName}</strong></span>
                 </div>
                 <button
                   id="launch-arena-btn"
@@ -104,7 +104,7 @@ export function MainMenu({
                   className="bng-cta-btn"
                   onClick={onLaunchArena}
                 >
-                  Démarrer sur Crash Test Arena →
+                  Start on Crash Test Arena →
                 </button>
               </div>
             </article>
@@ -116,16 +116,16 @@ export function MainMenu({
                   <div className="bng-city-grid" />
                   <span className="bng-coming-soon-banner">COMING SOON</span>
                 </div>
-                <span className="bng-map-tag soon">VERROUILLÉ</span>
+                <span className="bng-map-tag soon">LOCKED</span>
               </div>
               <div className="bng-map-body">
                 <h3>City</h3>
                 <p>
-                  Zone urbaine ouverte avec avenues, carrefours, autoroute, circulation et rampes de saut
-                  en cours de préparation pour les prochaines mises à jour.
+                  Open urban district with wide avenues, intersections, highway overpasses, traffic, and stunt ramps
+                  currently in development for upcoming updates.
                 </p>
                 <div className="bng-map-meta">
-                  <span>Statut : <strong>En développement</strong></span>
+                  <span>Status: <strong>In Development</strong></span>
                 </div>
                 <button type="button" className="bng-cta-btn locked" disabled>
                   🔒 COMING SOON

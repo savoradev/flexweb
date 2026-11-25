@@ -2,15 +2,15 @@ import React, { useState } from 'react';
 import type { CarOption } from '../engine/EngineCore';
 
 const PAINT_SWATCHES = [
-  { name: 'Papaya Orange', hex: 0xe06a10, finish: 'Métallisé' },
-  { name: 'Iridium Silver', hex: 0x8e969d, finish: 'Métallisé' },
-  { name: 'Obsidian Black', hex: 0x181b1f, finish: 'Brillant' },
-  { name: 'Frozen Brooklyn Grey', hex: 0x6b7280, finish: 'Mat' },
-  { name: 'Designo Crimson', hex: 0x991b24, finish: 'Métallisé' },
-  { name: 'Hellcat Plum', hex: 0x4c1d95, finish: 'Métallisé' },
-  { name: 'Solarbeam Gold', hex: 0xd49b27, finish: 'Métallisé' },
-  { name: 'Emerald Green', hex: 0x174f38, finish: 'Métallisé' },
-  { name: 'Alpine White', hex: 0xe3e6eb, finish: 'Brillant' },
+  { name: 'Papaya Orange', hex: 0xe06a10, finish: 'Metallic' },
+  { name: 'Iridium Silver', hex: 0x8e969d, finish: 'Metallic' },
+  { name: 'Obsidian Black', hex: 0x181b1f, finish: 'Gloss' },
+  { name: 'Frozen Brooklyn Grey', hex: 0x6b7280, finish: 'Matte' },
+  { name: 'Designo Crimson', hex: 0x991b24, finish: 'Metallic' },
+  { name: 'Hellcat Plum', hex: 0x4c1d95, finish: 'Metallic' },
+  { name: 'Solarbeam Gold', hex: 0xd49b27, finish: 'Metallic' },
+  { name: 'Emerald Green', hex: 0x174f38, finish: 'Metallic' },
+  { name: 'Alpine White', hex: 0xe3e6eb, finish: 'Gloss' },
 ];
 
 interface CarSpecInfo {
@@ -26,41 +26,41 @@ function getCarSpecs(opt: CarOption): CarSpecInfo {
   const n = opt.name.toLowerCase();
   if (n.includes('bmw') || n.includes('m4')) {
     return {
-      engine: '3.0L L6 Bi-Turbo (S58)',
-      power: '550 ch · 650 Nm',
-      layout: 'Moteur avant · Propulsion',
-      redline: '7 200 RPM',
+      engine: '3.0L Twin-Turbo I6 (S58)',
+      power: '543 hp · 650 Nm',
+      layout: 'Front-Engine · RWD',
+      redline: '7,200 RPM',
       accent: '#3b82f6',
-      badge: 'L6 BI-TURBO',
+      badge: 'TWIN-TURBO I6',
     };
   }
   if (n.includes('mclaren') || n.includes('p1')) {
     return {
-      engine: '3.8L V8 Bi-Turbo + IPAS Hybride',
-      power: '916 ch · 900 Nm',
-      layout: 'Moteur central-arrière · Aileron actif',
-      redline: '8 500 RPM',
+      engine: '3.8L Twin-Turbo V8 + IPAS Hybrid',
+      power: '903 hp · 900 Nm',
+      layout: 'Mid-Engine · Active Aero Wing',
+      redline: '8,500 RPM',
       accent: '#f97316',
-      badge: 'V8 HYBRIDE',
+      badge: 'HYBRID V8',
     };
   }
   if (n.includes('dodge') || n.includes('demon') || n.includes('challenger')) {
     return {
-      engine: '6.2L V8 HEMI Supercharged',
-      power: '840 ch · 1 044 Nm',
-      layout: 'Moteur avant · Compresseur',
-      redline: '6 500 RPM',
+      engine: '6.2L Supercharged HEMI V8',
+      power: '840 hp · 1,044 Nm',
+      layout: 'Front-Engine · Supercharged RWD',
+      redline: '6,500 RPM',
       accent: '#ef4444',
-      badge: 'V8 HEMI SC',
+      badge: 'HEMI V8 SC',
     };
   }
   return {
-    engine: '4.0L V8 Biturbo',
-    power: '510 ch · 650 Nm',
-    layout: 'Moteur avant · Propulsion',
-    redline: '7 200 RPM',
+    engine: '4.0L Twin-Turbo V8',
+    power: '510 hp · 650 Nm',
+    layout: 'Front-Engine · RWD',
+    redline: '7,200 RPM',
     accent: '#94a3b8',
-    badge: 'V8 COUPÉ',
+    badge: 'V8 COUPE',
   };
 }
 
@@ -85,28 +85,32 @@ export function CarSelectorModal({
   onDeleteSavedCar,
   onConfirmPlay,
   onClose,
-  confirmLabel = 'Sélectionner / Démarrer avec ce véhicule',
+  confirmLabel = 'Select & Drive This Vehicle',
 }: CarSelectorModalProps): React.ReactElement {
   const [focusedId, setFocusedId] = useState(activeCarId);
+  const [pickedHexByCar, setPickedHexByCar] = useState<Record<string, number>>({});
   const selected = cars.find((c) => c.id === focusedId) ?? cars.find((c) => c.id === activeCarId) ?? cars[0];
   const specs = selected ? getCarSpecs(selected) : null;
   const isLoaded = selected?.id === activeCarId;
 
   const handleCardClick = (opt: CarOption) => {
     setFocusedId(opt.id);
+    if (!carThumbs[opt.id] && opt.id !== activeCarId) {
+      void onSelectCar(opt);
+    }
   };
 
   return (
-    <div className="bng-overlay-backdrop" role="dialog" aria-label="Sélecteur de véhicules">
+    <div className="bng-overlay-backdrop" role="dialog" aria-label="Vehicle Selector">
       <div className="bng-modal-shell bng-cars-shell">
         <div className="bng-modal-header">
           <div>
-            <span className="bng-eyebrow">SHOWROOM FLEXWEB</span>
-            <h2 className="bng-modal-title">Sélecteur de Véhicules</h2>
+            <span className="bng-eyebrow">FLEXWEB SHOWROOM</span>
+            <h2 className="bng-modal-title">Vehicle Selector</h2>
           </div>
           <div className="bng-header-actions">
             <button type="button" className="btn btn-menu" onClick={onClose}>
-              ← Fermer
+              ← Close
             </button>
           </div>
         </div>
@@ -139,12 +143,12 @@ export function CarSelectorModal({
                         <span className="bng-car-code">{cleanTitle}</span>
                       </div>
                     )}
-                    {car.id === activeCarId && <span className="bng-active-pill">ACTIF</span>}
+                    {car.id === activeCarId && <span className="bng-active-pill">ACTIVE</span>}
                     {car.savedInDB && (
                       <button
                         type="button"
                         className="bng-car-del"
-                        title={`Supprimer ${cleanTitle}`}
+                        title={`Delete ${cleanTitle}`}
                         onClick={(e) => {
                           e.stopPropagation();
                           onDeleteSavedCar(car);
@@ -175,7 +179,7 @@ export function CarSelectorModal({
                       {specs.badge}
                     </span>
                     <strong>{selected.name.replace(/\s*\((public\/|Saved)\)$/i, '')}</strong>
-                    <span>{isLoaded ? 'Showroom Studio Blanc' : 'Aperçu Showroom Studio'}</span>
+                    <span>{isLoaded ? 'White Studio Showroom' : 'Studio Showroom Preview'}</span>
                   </div>
                 )}
               </div>
@@ -183,7 +187,7 @@ export function CarSelectorModal({
               {/* Mandatory Creative Commons Attribution neatly placed under the vehicle preview */}
               {selected.attribution && (
                 <div className="bng-car-credit" role="contentinfo">
-                  <span className="attr-badge">CRÉDIT 3D</span>
+                  <span className="attr-badge">3D CREDIT</span>
                   <span>
                     &ldquo;{selected.attribution.title}&rdquo; (
                     <a href={selected.attribution.modelUrl} target="_blank" rel="noopener noreferrer">
@@ -203,30 +207,37 @@ export function CarSelectorModal({
               )}
 
               <div className="bng-detail-specs">
-                <div><span>Moteur</span><strong>{specs.engine}</strong></div>
-                <div><span>Puissance</span><strong>{specs.power}</strong></div>
-                <div><span>Architecture</span><strong>{specs.layout}</strong></div>
-                <div><span>Rupteur</span><strong>{specs.redline}</strong></div>
+                <div><span>Engine</span><strong>{specs.engine}</strong></div>
+                <div><span>Output</span><strong>{specs.power}</strong></div>
+                <div><span>Layout</span><strong>{specs.layout}</strong></div>
+                <div><span>Redline</span><strong>{specs.redline}</strong></div>
               </div>
 
               <div className="bng-detail-paint">
-                <span className="popover-label">Couleur de carrosserie (temps réel)</span>
+                <span className="popover-label">Body Paint (Real-Time)</span>
                 <div className="bng-swatch-grid">
-                  {PAINT_SWATCHES.map((sw) => (
-                    <button
-                      key={sw.name}
-                      type="button"
-                      className="bng-swatch-btn"
-                      title={`${sw.name} (${sw.finish})`}
-                      onClick={() => onPickPaint(selected, sw.hex)}
-                    >
-                      <span
-                        className="bng-swatch-dot"
-                        style={{ background: `#${sw.hex.toString(16).padStart(6, '0')}` }}
-                      />
-                      <span className="bng-swatch-name">{sw.name}</span>
-                    </button>
-                  ))}
+                  {PAINT_SWATCHES.map((sw) => {
+                    const isPicked = pickedHexByCar[selected.id] === sw.hex;
+                    return (
+                      <button
+                        key={sw.name}
+                        type="button"
+                        className={`bng-swatch-btn ${isPicked ? 'active' : ''}`}
+                        style={isPicked ? { borderColor: '#f59e0b', boxShadow: '0 0 0 1px rgba(245,158,11,0.5)' } : undefined}
+                        title={`${sw.name} (${sw.finish})`}
+                        onClick={() => {
+                          setPickedHexByCar((prev) => ({ ...prev, [selected.id]: sw.hex }));
+                          onPickPaint(selected, sw.hex);
+                        }}
+                      >
+                        <span
+                          className="bng-swatch-dot"
+                          style={{ background: `#${sw.hex.toString(16).padStart(6, '0')}` }}
+                        />
+                        <span className="bng-swatch-name">{sw.name}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 

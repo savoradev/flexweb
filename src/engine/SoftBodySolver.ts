@@ -151,7 +151,7 @@ export class SoftBodySolver {
 
   /** High-frequency JBeam substep count (10 on 4 GB RAM tablets, 12 on desktop). */
   substeps = 12;
-  iterations = 2;
+  iterations = 1;
   gravity = -9.81;
   restitution = 0.05;
   minRatio = 0.46;
@@ -187,6 +187,10 @@ export class SoftBodySolver {
   readonly beamDeform: Float32Array; readonly beamDeform0: Float32Array;
   readonly beamStrength: Float32Array;
   readonly compliance: Float32Array;
+  readonly compDamp: Float32Array;
+  readonly invRest0: Float32Array;
+  readonly minLen: Float32Array;
+  readonly maxLen: Float32Array;
   readonly yieldStrain: Float32Array; readonly yieldStrain0: Float32Array;
   readonly hardening: Float32Array; readonly breakStrain: Float32Array;
   readonly lambda: Float32Array;
@@ -214,6 +218,7 @@ export class SoftBodySolver {
 
   // Pre-allocated broadphase & scratch buffers
   private readonly activeBoxes: Int32Array;
+  private readonly activeBoxIsPress: Uint8Array;
   private readonly activeCyls: Int32Array;
   private readonly boxCornersX: Float32Array;
   private readonly boxCornersZ: Float32Array;
@@ -259,6 +264,10 @@ export class SoftBodySolver {
     this.beamDeform = P.f32(m); this.beamDeform0 = P.f32(m);
     this.beamStrength = P.f32(m);
     this.compliance = P.f32(m);
+    this.compDamp = P.f32(m);
+    this.invRest0 = P.f32(m);
+    this.minLen = P.f32(m);
+    this.maxLen = P.f32(m);
     this.yieldStrain = P.f32(m); this.yieldStrain0 = P.f32(m);
     this.hardening = P.f32(m); this.breakStrain = P.f32(m);
     this.lambda = P.f32(m);
@@ -277,6 +286,7 @@ export class SoftBodySolver {
     this.zoneDamage = P.f32(ZONE_COUNT);
     this.zoneCapacity = P.f32(ZONE_COUNT);
     this.activeBoxes = P.i32(128);
+    this.activeBoxIsPress = P.u8(128);
     this.activeCyls = P.i32(128);
     this.boxCornersX = P.f32(256);
     this.boxCornersZ = P.f32(256);
@@ -303,6 +313,10 @@ export class SoftBodySolver {
       const L = Math.sqrt(dx * dx + dy * dy + dz * dz);
       this.restLength[j] = L;
       this.restLength0[j] = L;
+      this.invRest0[j] = L > 1e-7 ? 1 / L : 0;
+      const minR = b.zone === Zone.EngineSubframe ? this.minRatioEngine : b.zone === Zone.Bumper ? this.minRatioBumper : this.minRatio;
+      this.minLen[j] = minR * L;
+      this.maxLen[j] = this.maxRatio * L;
 
       const kSpring = z.spring * (b.springScale ?? 1);
       const cDamp = z.damp * (b.dampScale ?? 1);
@@ -313,6 +327,7 @@ export class SoftBodySolver {
       this.beamSpring[j] = kSpring;
       this.beamDamp[j] = cDamp;
       this.compliance[j] = 1 / kSpring;
+      this.compDamp[j] = cDamp / kSpring;
       this.yieldStrain[j] = yth;
       this.yieldStrain0[j] = yth;
       this.beamDeform[j] = kSpring * yth * L;
@@ -357,10 +372,10 @@ export class SoftBodySolver {
     this.brokenThisStep = 0;
     this.lastImpact = 0;
     const h = dt / this.substeps;
-    for (let s = 0; s < this.substeps; s++) this.substep(h);
+    for (let s = 0; s < this.substeps; s++) this.substep(h, (s & 1) === 0);
   }
 
-  private substep(h: number): void {
+  private substep(h: number, runColtris: boolean): void {
     const n = this.nodeCount;
     const { px, py, pz, qx, qy, qz, vx, vy, vz, fx, fy, fz, invMass } = this;
     if (this.forceProvider) this.forceProvider.applySubstepForces(h);
@@ -375,9 +390,10 @@ export class SoftBodySolver {
       const w = invMass[i];
       qx[i] = px[i]; qy[i] = py[i]; qz[i] = pz[i];
       if (w > 0) {
-        let nvx = (vx[i] + fx[i] * w * h) * damp;
-        let nvy = vy[i] + g + fy[i] * w * h;
-        let nvz = (vz[i] + fz[i] * w * h) * damp;
+        const wh = w * h;
+        let nvx = (vx[i] + fx[i] * wh) * damp;
+        let nvy = vy[i] + g + fy[i] * wh;
+        let nvz = (vz[i] + fz[i] * wh) * damp;
         const v2 = nvx * nvx + nvy * nvy + nvz * nvz;
         if (v2 > maxV2) {
           const s = maxV / Math.sqrt(v2);
@@ -393,10 +409,9 @@ export class SoftBodySolver {
     this.cObstacle.fill(0);
     this.lambda.fill(0);
     for (let it = 0; it < this.iterations; it++) {
-      this.solveCollisions(h);
       this.solveBeams(h);
     }
-    this.solveCollisions(h);
+    this.solveCollisions(h, runColtris);
 
     // Stabilized Verlet velocity recovery + per-substep speed clamp + NaN guard
     const inv = 1 / h;
@@ -430,14 +445,14 @@ export class SoftBodySolver {
   private solveBeams(h: number): void {
     const {
       px, py, pz, qx, qy, qz, invMass, beamA, beamB,
-      restLength, restLength0, beamSpring, beamDamp, beamDeform, beamStrength,
-      compliance, flags, beamState, lambda, yieldStrain, cObstacle, zone,
+      restLength, restLength0, invRest0, minLen, maxLen,
+      beamSpring, beamDeform, beamStrength,
+      compliance, compDamp, flags, beamState, lambda, yieldStrain,
+      hardening, breakStrain, cObstacle, zone, zoneDamage,
     } = this;
-    const baseMinR = this.minRatio;
-    const bumperMinR = this.minRatioBumper;
-    const engineMinR = this.minRatioEngine;
-    const maxR = this.maxRatio;
     const h2 = h * h;
+    const invH = 1 / h;
+    const invH2 = 1 / h2;
     const m = this.beamCount;
 
     for (let j = 0; j < m; j++) {
@@ -449,63 +464,73 @@ export class SoftBodySolver {
       const w = wa + wb;
       if (w === 0) continue;
 
-      let dx = px[b] - px[a], dy = py[b] - py[a], dz = pz[b] - pz[a];
+      const pxa = px[a], pya = py[a], pza = pz[a];
+      const pxb = px[b], pyb = py[b], pzb = pz[b];
+      let dx = pxb - pxa, dy = pyb - pya, dz = pzb - pza;
       const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (len < 1e-7) continue;
       const il = 1 / len;
       dx *= il; dy *= il; dz *= il;
 
-      const z = zone[j];
-      const minR = z === Zone.EngineSubframe ? engineMinR : z === Zone.Bumper ? bumperMinR : baseMinR;
-      const L0 = restLength0[j];
       let L = restLength[j];
       const C = len - L;
-      const alpha = compliance[j] / h2;
-      const gamma = (compliance[j] * beamDamp[j]) / h;
+      const alpha = compliance[j] * invH2;
+      const gamma = compDamp[j] * invH;
       const vrel =
-        ((px[b] - qx[b]) - (px[a] - qx[a])) * dx +
-        ((py[b] - qy[b]) - (py[a] - qy[a])) * dy +
-        ((pz[b] - qz[b]) - (pz[a] - qz[a])) * dz;
+        ((pxb - qx[b]) - (pxa - qx[a])) * dx +
+        ((pyb - qy[b]) - (pya - qy[a])) * dy +
+        ((pzb - qz[b]) - (pza - qz[a])) * dz;
 
       // 1. Elastic trial force & JBeam 3-state check (ELASTIC -> PLASTIC -> BROKEN)
       const denomEl = w + alpha;
-      const dlEl = (-C - alpha * lambda[j]) / denomEl;
-      let lamEl = lambda[j] + dlEl;
+      const prevLam = lambda[j];
+      let lamEl = prevLam + (-C - alpha * prevLam) / denomEl;
       const deformCap = beamDeform[j] * h2;
-      let yielded = false;
+      let corr: number;
 
-      if (lamEl > deformCap || lamEl < -deformCap) {
-        yielded = true;
+      if (lamEl <= deformCap && lamEl >= -deformCap) {
+        // Fast elastic path (99% of beams on most substeps)
+        lambda[j] = lamEl;
+        const dlDamp = (-gamma * vrel) / ((1 + gamma) * w + alpha);
+        corr = (lamEl - prevLam) + dlDamp;
+      } else {
+        const z = zone[j];
+        const L0 = restLength0[j];
+        const minL = minLen[j];
+        const maxL = maxLen[j];
         const sign = lamEl > 0 ? 1 : -1;
         const excess = (Math.abs(lamEl) - deformCap) * denomEl;
         const oldL = L;
         // Accordion buckling in crumple zones absorbs extra compression without elastic springback
         const buckleRelax = (z === Zone.Crumple && sign > 0) ? 0.80 : 0.70;
         L -= sign * (excess + (deformCap * buckleRelax) * denomEl);
-        if (L < minR * L0) L = minR * L0;
-        else if (L > maxR * L0) L = maxR * L0;
+        if (L < minL) L = minL;
+        else if (L > maxL) L = maxL;
 
         const plastic = Math.abs(L - oldL);
         if (plastic > 0) {
           restLength[j] = L;
           beamState[j] = BEAM_STATE_PLASTIC;
-          const dYield = this.hardening[j] * (plastic / L0);
-          yieldStrain[j] += dYield;
+          const invL0 = invRest0[j];
+          yieldStrain[j] += hardening[j] * (plastic * invL0);
           beamDeform[j] = beamSpring[j] * yieldStrain[j] * L0;
-          this.zoneDamage[z] += plastic;
-          this.plasticWork += (deformCap / h2) * plastic;
+          zoneDamage[z] += plastic;
+          this.plasticWork += (deformCap * invH2) * plastic;
         }
         lamEl = sign * deformCap * (1 - buckleRelax);
 
         if (fl & BEAM_BREAKABLE) {
-          const totalForce = beamSpring[j] * Math.abs(len - L0);
-          const totalStrain = Math.abs(len - L0) / L0;
-          const plasticStrain = Math.abs(L - L0) / L0;
+          const invL0 = invRest0[j];
+          const absDL0 = Math.abs(len - L0);
+          const totalForce = beamSpring[j] * absDL0;
+          const totalStrain = absDL0 * invL0;
+          const plasticStrain = Math.abs(L - L0) * invL0;
           const strCap = beamStrength[j];
+          const brkS = breakStrain[j];
           if (
             (strCap > 0 && totalForce > strCap) ||
-            totalStrain > this.breakStrain[j] ||
-            plasticStrain > this.breakStrain[j] * 0.55
+            totalStrain > brkS ||
+            plasticStrain > brkS * 0.55
           ) {
             flags[j] = fl | BEAM_BROKEN;
             beamState[j] = BEAM_STATE_BROKEN;
@@ -513,24 +538,22 @@ export class SoftBodySolver {
             continue;
           }
         }
+
+        lambda[j] = lamEl;
+        const gYield = gamma * 2.6;
+        const dlDamp = (-gYield * vrel) / ((1 + gYield) * w + alpha);
+        corr = (lamEl - prevLam) + dlDamp;
       }
 
-      const dlSpring = lamEl - lambda[j];
-      lambda[j] = lamEl;
-
-      // 2. Viscous damping impulse (dissipates crash energy cleanly without jelly rebound)
-      const dampScale = yielded ? 2.6 : 1.0;
-      const denomDamp = (1 + gamma * dampScale) * w + alpha;
-      const dlDamp = (-gamma * dampScale * vrel) / denomDamp;
-
-      let corr = dlSpring + dlDamp;
       const newLen = len + w * corr;
-      if (newLen < minR * L0) corr += (minR * L0 - newLen) / w;
-      else if (newLen > maxR * L0) corr += (maxR * L0 - newLen) / w;
+      const minL = minLen[j];
+      const maxL = maxLen[j];
+      if (newLen < minL) corr += (minL - newLen) / w;
+      else if (newLen > maxL) corr += (maxL - newLen) / w;
 
       const ca = wa * corr, cb = wb * corr;
-      px[a] -= dx * ca; py[a] -= dy * ca; pz[a] -= dz * ca;
-      px[b] += dx * cb; py[b] += dy * cb; pz[b] += dz * cb;
+      px[a] = pxa - dx * ca; py[a] = pya - dy * ca; pz[a] = pza - dz * ca;
+      px[b] = pxb + dx * cb; py[b] = pyb + dy * cb; pz[b] = pzb + dz * cb;
     }
   }
 
@@ -574,10 +597,14 @@ export class SoftBodySolver {
       }
     }
 
-    // Precompute vertical corner edges of nearby non-press boxes for coltri anti-clipping
-    for (let a = 0; a < this.activeBoxCount && this.boxCornerCount + 4 <= 256; a++) {
+    // Cache isPress flag & precompute vertical corner edges of nearby non-press boxes once per frame
+    for (let a = 0; a < this.activeBoxCount; a++) {
       const boxIdx = this.activeBoxes[a];
-      if (world.isPressBox ? world.isPressBox(boxIdx) : boxIdx === world.pressBoxIndex) continue;
+      const isPress = world.isPressBox
+        ? world.isPressBox(boxIdx)
+        : (world.pressBoxIndex !== undefined && boxIdx === world.pressBoxIndex);
+      this.activeBoxIsPress[a] = isPress ? 1 : 0;
+      if (isPress || this.boxCornerCount + 4 > 256) continue;
       const o = boxIdx * BOX_STRIDE;
       const hx = B[o + 3], hy = B[o + 4], hz = B[o + 5];
       if (hx > 40 || hz > 40) continue; // skip straight perimeter walls (no sharp corner poke)
@@ -592,6 +619,22 @@ export class SoftBodySolver {
           this.boxCornersX[idx] = cx + lx * c + lz * s;
           this.boxCornersZ[idx] = cz - lx * s + lz * c;
           this.boxCornerY1[idx] = topY;
+        }
+      }
+    }
+
+    // Check once per frame whether the vehicle is near any crusher roller
+    this.nearRollers = false;
+    const rollers = world.rollers;
+    const rollerCount = world.rollerCount ?? 0;
+    if (rollers && rollerCount > 0) {
+      for (let rIdx = 0; rIdx < rollerCount; rIdx++) {
+        const ro = rIdx * ROLLER_STRIDE;
+        const rcx = rollers[ro], rcz = rollers[ro + 2];
+        const hw = rollers[ro + 3] + 2.0, rad = rollers[ro + 4] + 2.0;
+        if (rcx + hw >= minX && rcx - hw <= maxX && rcz + rad >= minZ && rcz - rad <= maxZ) {
+          this.nearRollers = true;
+          break;
         }
       }
     }
@@ -620,14 +663,16 @@ export class SoftBodySolver {
     if (obstacle) this.cObstacle[i] = 1;
   }
 
-  private solveCollisions(h: number): void {
+  private nearRollers = false;
+
+  private solveCollisions(h: number, runColtris: boolean): void {
     const world = this.world;
     if (!world) return;
     const { px, py, pz, radius, invMass } = this;
     const gs = this.ground;
     const B = world.boxes, Cy = world.cyls;
-    const rollers = world.rollers;
-    const rollerCount = world.rollerCount ?? 0;
+    const rollers = this.nearRollers ? world.rollers : undefined;
+    const rollerCount = rollers ? (world.rollerCount ?? 0) : 0;
 
     for (let i = 0; i < this.nodeCount; i++) {
       if (invMass[i] === 0) continue;
@@ -653,9 +698,7 @@ export class SoftBodySolver {
         const hx = B[o + 3] + r, hy = B[o + 4] + r, hz = B[o + 5] + r;
         if (lx > hx || lx < -hx || ry > hy || ry < -hy || lz > hz || lz < -hz) continue;
 
-        const isPress = world.isPressBox
-          ? world.isPressBox(boxIdx)
-          : (world.pressBoxIndex !== undefined && boxIdx === world.pressBoxIndex);
+        const isPress = this.activeBoxIsPress[a] === 1;
 
         if (isPress && ry < hy * 0.65) {
           const minPressY = gs.h + 0.96;
@@ -714,13 +757,11 @@ export class SoftBodySolver {
           const d = Math.sqrt(d2) || 1e-5;
           const ny = dy / d, nz = dz / d;
           const rawPen = R - d;
-          // Gentle progressive roof flatten without ever pushing nodes below minFloor or ejecting
           if (ny < -0.15 && py[i] <= minFloor) {
             continue;
           }
           const pen = Math.min(0.016, rawPen);
           this.contact(i, 0, ny, nz, pen, 0.72, 1);
-          // Tangential roller feed (~1.8 m/s slow crawl)
           const feedVz = rollers[ro + 5];
           if (feedVz !== 0) {
             pz[i] += (feedVz - this.vz[i]) * 0.12 * h;
@@ -744,12 +785,14 @@ export class SoftBodySolver {
         else this.contact(i, dx / d, 0, dz / d, penR, Cy[o + 5], 1);
       }
 
-      // 5. Post-obstacle ground floor guarantee
-      const dgPost = (py[i] - gs.h) * gs.ny - r;
-      if (dgPost < 0) {
-        const penPost = -dgPost > 0.35 ? 0.055 : -dgPost;
-        this.contact(i, gs.nx, gs.ny, gs.nz, penPost, gs.mu, 0);
-        if (this.vy[i] < 0) this.vy[i] *= 0.2;
+      // 5. Post-obstacle ground floor guarantee (only needed when an obstacle pushed this node)
+      if (this.cObstacle[i]) {
+        const dgPost = (py[i] - gs.h) * gs.ny - r;
+        if (dgPost < 0) {
+          const penPost = -dgPost > 0.35 ? 0.055 : -dgPost;
+          this.contact(i, gs.nx, gs.ny, gs.nz, penPost, gs.mu, 0);
+          if (this.vy[i] < 0) this.vy[i] *= 0.2;
+        }
       }
     }
 
@@ -786,7 +829,7 @@ export class SoftBodySolver {
     }
 
     // 7. Surface Collision Triangles (`coltris`) vs Poles & Sharp Barrier Corners (Anti-Clipping)
-    if (this.coltriCount > 0 && (this.activeCylCount > 0 || this.boxCornerCount > 0)) {
+    if (runColtris && this.coltriCount > 0 && (this.activeCylCount > 0 || this.boxCornerCount > 0)) {
       this.solveColtris(Cy);
     }
   }

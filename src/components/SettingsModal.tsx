@@ -28,7 +28,7 @@ export function SettingsModal({
   };
 
   return (
-    <div className="bng-overlay-backdrop" role="dialog" aria-label="Paramètres FlexWeb">
+    <div className="bng-overlay-backdrop" role="dialog" aria-label="FlexWeb Settings">
       <div className="bng-modal-shell bng-settings-shell">
         <div className="bng-modal-header">
           <div>
@@ -37,17 +37,17 @@ export function SettingsModal({
           </div>
           <div className="bng-header-actions">
             <button type="button" className="btn btn-menu" onClick={onResetDefaults}>
-              Réinitialiser
+              Reset Defaults
             </button>
             <button type="button" className="btn btn-menu" onClick={onClose}>
-              ← Fermer
+              ← Close
             </button>
           </div>
         </div>
 
         <div className="bng-settings-body">
           {/* Left Category Sidebar */}
-          <nav className="bng-settings-tabs" aria-label="Catégories de réglages">
+          <nav className="bng-settings-tabs" aria-label="Settings Categories">
             <button
               type="button"
               className={`bng-tab-btn ${tab === 'general' ? 'active' : ''}`}
@@ -77,8 +77,8 @@ export function SettingsModal({
               <div className="bng-settings-group">
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Sensibilité de direction</strong>
-                    <span>Vitesse de braquage au clavier et tactile</span>
+                    <strong>Steering Sensitivity</strong>
+                    <span>Steering response speed for keyboard and touch controls</span>
                   </div>
                   <div className="bng-slider-wrap">
                     <input
@@ -95,8 +95,8 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>ABS (Antiblocage de freins)</strong>
-                    <span>Modulation 14 Hz et clignotement d&apos;urgence des feux stop</span>
+                    <strong>ABS (Anti-Lock Braking)</strong>
+                    <span>14 Hz brake modulation with emergency brake light flash</span>
                   </div>
                   <button
                     type="button"
@@ -109,8 +109,8 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>TCS (Antipatinage)</strong>
-                    <span>Limite le patinage des roues motrices en virage</span>
+                    <strong>TCS (Traction Control)</strong>
+                    <span>Limits driven wheelspin during hard acceleration and cornering</span>
                   </div>
                   <button
                     type="button"
@@ -123,8 +123,8 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Unités de vitesse</strong>
-                    <span>Affichage du tachymètre en jeu</span>
+                    <strong>Speed Units</strong>
+                    <span>In-game speedometer and telemetry display unit</span>
                   </div>
                   <div className="bng-seg-group">
                     <button
@@ -146,8 +146,8 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Afficher le HUD</strong>
-                    <span>Affiche le compteur et les contrôles rapides (touche H)</span>
+                    <strong>Show HUD</strong>
+                    <span>Display tachometer and quick action bar (H key)</span>
                   </div>
                   <button
                     type="button"
@@ -160,8 +160,8 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Diagnostic Véhicule style BeamNG</strong>
-                    <span>Silhouette temps réel des dégâts à droite</span>
+                    <strong>Vehicle Diagnostics Overlay</strong>
+                    <span>Real-time damage schematic panel on the right</span>
                   </div>
                   <button
                     type="button"
@@ -174,10 +174,10 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Raccourcis clavier</strong>
-                    <span>Conduite WASD / Flèches · Frein à main Espace · Pause Échap</span>
+                    <strong>Keyboard Controls</strong>
+                    <span>Drive WASD / Arrows · Handbrake Space · Map M · Pause Esc</span>
                   </div>
-                  <span className="bng-val-chip">Reset : R</span>
+                  <span className="bng-val-chip">Reset: R</span>
                 </div>
               </div>
             )}
@@ -186,22 +186,22 @@ export function SettingsModal({
               <div className="bng-settings-group">
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Couper le son (Mute)</strong>
-                    <span>Désactive instantanément tout le moteur Web Audio</span>
+                    <strong>Mute Audio</strong>
+                    <span>Instantly silence the entire Web Audio sound engine</span>
                   </div>
                   <button
                     type="button"
                     className={`btn btn-menu ${settings.muted ? 'active' : ''}`}
                     onClick={() => patch('muted', !settings.muted)}
                   >
-                    {settings.muted ? 'MUTED' : 'ACTIF'}
+                    {settings.muted ? 'MUTED' : 'ACTIVE'}
                   </button>
                 </div>
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Volume principal</strong>
-                    <span>Niveau global du simulateur</span>
+                    <strong>Master Volume</strong>
+                    <span>Overall simulator audio level</span>
                   </div>
                   <div className="bng-slider-wrap">
                     <input
@@ -218,8 +218,8 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Moteur, Échappement &amp; Suralimentation</strong>
-                    <span>BMW L6 S58 · McLaren V8 Flat-Plane · Dodge HEMI Supercharger</span>
+                    <strong>Engine, Exhaust &amp; Supercharger</strong>
+                    <span>BMW I6 S58 · McLaren Flat-Plane V8 · Dodge HEMI Supercharger</span>
                   </div>
                   <div className="bng-slider-wrap">
                     <input
@@ -236,8 +236,8 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Pneus &amp; Impacts de crash</strong>
-                    <span>Crissements de dérive, freinages ABS et chocs métalliques</span>
+                    <strong>Tires &amp; Crash Impacts</strong>
+                    <span>Tire screech, ABS braking, and metallic structural crashes</span>
                   </div>
                   <div className="bng-slider-wrap">
                     <input
@@ -258,8 +258,8 @@ export function SettingsModal({
               <div className="bng-settings-group">
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Qualité des ombres</strong>
-                    <span>Ombres dynamiques du soleil et des obstacles</span>
+                    <strong>Shadow Quality</strong>
+                    <span>Dynamic sun shadows on vehicles and obstacles</span>
                   </div>
                   <div className="bng-seg-group">
                     {(['off', 'low', 'high'] as ShadowQuality[]).map((q) => (
@@ -277,8 +277,8 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Reflets temps réel (CubeCamera)</strong>
-                    <span>Reflets dynamiques du ciel et de l&apos;arène sur la carrosserie</span>
+                    <strong>Real-Time Reflections (CubeCamera)</strong>
+                    <span>Dynamic sky and arena reflections on car paint &amp; glass</span>
                   </div>
                   <div className="bng-seg-group">
                     {(['off', 'low', 'high'] as ReflectionQuality[]).map((q) => (
@@ -296,14 +296,14 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Résolution / Pixel Ratio</strong>
-                    <span>Auto est optimisé 60 FPS pour tablettes 4 Go de RAM</span>
+                    <strong>Resolution / Pixel Ratio</strong>
+                    <span>Auto caps 1.25× on tablets &amp; 1.5× on desktop for locked 60 FPS</span>
                   </div>
                   <div className="bng-seg-group">
                     {([
-                      { id: 'auto', label: 'Auto 4GB' },
+                      { id: 'auto', label: 'Auto 60 FPS' },
                       { id: 'performance', label: 'Performance' },
-                      { id: 'quality', label: 'Qualité' },
+                      { id: 'quality', label: 'Quality' },
                     ] as { id: ResolutionMode; label: string }[]).map((r) => (
                       <button
                         key={r.id}
@@ -319,11 +319,11 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Distance d&apos;affichage</strong>
-                    <span>Portée de la caméra sur la GridMap 400 m</span>
+                    <strong>Render Distance</strong>
+                    <span>Full-map camera view range across the 2 km × 2 km Proving Ground</span>
                   </div>
                   <div className="bng-seg-group">
-                    {[180, 300, 450].map((d) => (
+                    {[2200, 3500, 5000].map((d) => (
                       <button
                         key={d}
                         type="button"
@@ -338,8 +338,8 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Nuages Skybox animés</strong>
-                    <span>Shader procédural léger de nuages dans le ciel</span>
+                    <strong>Animated Skybox Clouds</strong>
+                    <span>Lightweight procedural volumetric cloud shader</span>
                   </div>
                   <button
                     type="button"

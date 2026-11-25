@@ -21,15 +21,15 @@ function partColor(state: string | undefined, fallbackDmg: number): string {
   return dmgColor(fallbackDmg);
 }
 
-function bumperStateFr(state: string | undefined): { text: string; cls: string } {
-  if (state === 'detached') return { text: 'Arraché', cls: 'diag-red' };
-  if (state === 'unlatched') return { text: 'Pendant', cls: 'diag-warn' };
-  return { text: 'Attaché', cls: 'diag-ok' };
+function bumperStateLabel(state: string | undefined): { text: string; cls: string } {
+  if (state === 'detached') return { text: 'Detached', cls: 'diag-red' };
+  if (state === 'unlatched') return { text: 'Hanging', cls: 'diag-warn' };
+  return { text: 'Attached', cls: 'diag-ok' };
 }
 
-function engineStateFr(dmg: number): { text: string; cls: string } {
-  if (dmg >= 0.45) return { text: `Critique (${Math.round(dmg * 100)}%)`, cls: 'diag-red' };
-  if (dmg >= 0.12) return { text: `Touché (${Math.round(dmg * 100)}%)`, cls: 'diag-warn' };
+function engineStateLabel(dmg: number): { text: string; cls: string } {
+  if (dmg >= 0.45) return { text: `Critical (${Math.round(dmg * 100)}%)`, cls: 'diag-red' };
+  if (dmg >= 0.12) return { text: `Damaged (${Math.round(dmg * 100)}%)`, cls: 'diag-warn' };
   return { text: 'OK', cls: 'diag-ok' };
 }
 
@@ -48,7 +48,7 @@ export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = React.memo(
           onClick={onToggle}
         >
           <span className="pill-icon">+</span>
-          <span>Diagnostic · {100 - structDmg}%</span>
+          <span>Diagnostics · {100 - structDmg}%</span>
         </button>
       );
     }
@@ -94,20 +94,20 @@ export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = React.memo(
       Math.min(100, Math.round((1 - (frontDmg * 0.35 + cabinDmg * 0.4 + rearDmg * 0.25)) * 100)),
     );
     const chassisCls = chassisIntegrity > 82 ? 'diag-ok' : chassisIntegrity > 52 ? 'diag-warn' : 'diag-red';
-    const bfInfo = bumperStateFr(bumperFState);
-    const brInfo = bumperStateFr(bumperRState);
-    const engInfo = engineStateFr(engineDmg);
+    const bfInfo = bumperStateLabel(bumperFState);
+    const brInfo = bumperStateLabel(bumperRState);
+    const engInfo = engineStateLabel(engineDmg);
     const avgSuspPct = Math.round(((susp[0] + susp[1] + susp[2] + susp[3]) / 4) * 100);
 
     return (
-      <section className="panel-card diag-card" aria-label="Diagnostic Véhicule">
+      <section className="panel-card diag-card" aria-label="Vehicle Diagnostics">
         <div className="panel-header">
-          <h2 className="panel-title">Diagnostic Véhicule</h2>
+          <h2 className="panel-title">Vehicle Diagnostics</h2>
           <button
             id="collapse-diagnostics-drawer"
             type="button"
             className="drawer-toggle-btn"
-            title="Replier le diagnostic véhicule"
+            title="Collapse vehicle diagnostics"
             onClick={onToggle}
           >
             −
@@ -120,7 +120,7 @@ export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = React.memo(
             viewBox="0 0 120 184"
             className="diag-svg"
             role="img"
-            aria-label="Schéma des dommages du véhicule"
+            aria-label="Vehicle damage schematic"
           >
             {/* Front Bumper */}
             <path
@@ -176,7 +176,7 @@ export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = React.memo(
               strokeDasharray={bumperRState === 'detached' ? '3 2' : undefined}
             />
 
-            {/* Engine Block Icon (Front for BMW/GT-S, Rear for McLaren P1) */}
+            {/* Engine Block Icon (Front for BMW/Dodge, Mid-Rear for McLaren P1) */}
             <g transform={midRear ? 'translate(46, 132)' : 'translate(46, 34)'}>
               <rect
                 x="0"
@@ -195,13 +195,9 @@ export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = React.memo(
             </g>
 
             {/* 4 Wheels & Suspension Travel Bars (FL, FR, RL, RR) */}
-            {/* FL */}
             <rect x="10" y="32" width="11" height="26" rx="3" fill={wheelCols[0]} fillOpacity="0.88" stroke="#0b0f17" strokeWidth="1" />
-            {/* FR */}
             <rect x="99" y="32" width="11" height="26" rx="3" fill={wheelCols[1]} fillOpacity="0.88" stroke="#0b0f17" strokeWidth="1" />
-            {/* RL */}
             <rect x="10" y="128" width="11" height="26" rx="3" fill={wheelCols[2]} fillOpacity="0.88" stroke="#0b0f17" strokeWidth="1" />
-            {/* RR */}
             <rect x="99" y="128" width="11" height="26" rx="3" fill={wheelCols[3]} fillOpacity="0.88" stroke="#0b0f17" strokeWidth="1" />
           </svg>
 
@@ -210,19 +206,13 @@ export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = React.memo(
             viewBox="0 0 180 46"
             className="diag-profile-svg"
             role="img"
-            aria-label="Profil latéral du véhicule"
+            aria-label="Vehicle side profile"
           >
-            {/* Front bumper profile */}
             <rect x="150" y="21" width="18" height="14" rx="3" fill={bumperFCol} fillOpacity="0.78" />
-            {/* Hood / front */}
             <polygon points="108,18 150,21 150,35 108,35" fill={hoodCol} fillOpacity="0.65" />
-            {/* Cabin */}
             <polygon points="58,18 74,7 112,7 124,18 124,35 58,35" fill={cabinCol} fillOpacity="0.62" />
-            {/* Rear / trunk */}
             <polygon points="24,19 58,18 58,35 24,35" fill={trunkCol} fillOpacity="0.65" />
-            {/* Rear bumper profile */}
             <rect x="10" y="21" width="14" height="14" rx="3" fill={bumperRCol} fillOpacity="0.78" />
-            {/* Front & Rear wheels */}
             <circle cx="136" cy="35" r="9" fill="#0b0f17" stroke={wheelCols[0]} strokeWidth="3" />
             <circle cx="42" cy="35" r="9" fill="#0b0f17" stroke={wheelCols[2]} strokeWidth="3" />
           </svg>
@@ -231,23 +221,69 @@ export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = React.memo(
         {/* Real-time Key Subsystem Status Rows */}
         <div className="diag-rows">
           <div className="diag-row">
-            <span>Châssis</span>
+            <span>Chassis</span>
             <strong className={chassisCls}>{chassisIntegrity}%</strong>
           </div>
           <div className="diag-row">
-            <span>Moteur ({midRear ? 'AR' : 'AV'})</span>
-            <strong className={engInfo.cls}>{engInfo.text}</strong>
+            <span>Engine ({midRear ? 'Rear' : 'Front'})</span>
+            <strong className={telemetry?.mech?.engineStalled ? 'diag-red' : engInfo.cls}>
+              {telemetry?.mech?.engineStalled
+                ? 'STALLED (0%)'
+                : engInfo.text}
+            </strong>
           </div>
           <div className="diag-row">
-            <span>Pare-choc AV</span>
-            <strong className={bfInfo.cls}>{bfInfo.text}</strong>
+            <span>Steering</span>
+            <strong
+              className={
+                telemetry?.mech?.steeringLocked
+                  ? 'diag-red'
+                  : (telemetry?.mech?.steeringDamage ?? 0) > 0.18
+                    ? 'diag-warn'
+                    : 'diag-ok'
+              }
+            >
+              {telemetry?.mech?.steeringLocked
+                ? 'LOCKED'
+                : (telemetry?.mech?.steeringDamage ?? 0) > 0.18
+                  ? `Bent (${telemetry?.mech?.steeringBiasDeg ?? 0}°)`
+                  : 'OK'}
+            </strong>
           </div>
           <div className="diag-row">
-            <span>Pare-choc AR</span>
-            <strong className={brInfo.cls}>{brInfo.text}</strong>
+            <span>Axles (F / R)</span>
+            <strong
+              className={
+                Math.max(telemetry?.mech?.frontAxleDamage ?? 0, telemetry?.mech?.rearAxleDamage ?? 0) > 0.65
+                  ? 'diag-red'
+                  : Math.max(telemetry?.mech?.frontAxleDamage ?? 0, telemetry?.mech?.rearAxleDamage ?? 0) > 0.18
+                    ? 'diag-warn'
+                    : 'diag-ok'
+              }
+            >
+              {Math.round((1 - (telemetry?.mech?.frontAxleDamage ?? 0)) * 100)}% / {Math.round((1 - (telemetry?.mech?.rearAxleDamage ?? 0)) * 100)}%
+            </strong>
+          </div>
+          {(telemetry?.mech?.oilLeak || telemetry?.mech?.coolantLeak) && (
+            <div className="diag-row">
+              <span>Fluid Leaks</span>
+              <strong className="diag-red">
+                {telemetry.mech.oilLeak && telemetry.mech.coolantLeak
+                  ? 'OIL + COOLANT'
+                  : telemetry.mech.coolantLeak
+                    ? 'COOLANT LEAK'
+                    : 'OIL LEAK'}
+              </strong>
+            </div>
+          )}
+          <div className="diag-row">
+            <span>Front / Rear Bumper</span>
+            <strong className={bfInfo.cls === 'diag-red' || brInfo.cls === 'diag-red' ? 'diag-red' : bfInfo.cls === 'diag-warn' || brInfo.cls === 'diag-warn' ? 'diag-warn' : 'diag-ok'}>
+              {bfInfo.text} · {brInfo.text}
+            </strong>
           </div>
           <div className="diag-row">
-            <span>Suspensions</span>
+            <span>Suspension</span>
             <strong className={dmgColor(Math.max(wheelDmgFront, wheelDmgRear)) === '#22c55e' ? 'diag-ok' : 'diag-warn'}>
               4/4 · {avgSuspPct}%
             </strong>

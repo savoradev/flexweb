@@ -28,10 +28,10 @@ export function PauseMenu({
   onToggleTouch,
 }: PauseMenuProps): React.ReactElement {
   return (
-    <div className="bng-overlay-backdrop" role="dialog" aria-label="Menu Pause">
+    <div className="bng-overlay-backdrop" role="dialog" aria-label="Pause Menu">
       <div className="bng-pause-card">
         <div className="bng-pause-header">
-          <span className="bng-eyebrow">SIMULATION EN PAUSE</span>
+          <span className="bng-eyebrow">SIMULATION PAUSED</span>
           <h2>FLEXWEB</h2>
         </div>
 
@@ -60,21 +60,21 @@ export function PauseMenu({
               className={`btn btn-menu ${showLattice ? 'active' : ''}`}
               onClick={onToggleLattice}
             >
-              X-Ray : {showLattice ? 'ON' : 'OFF'}
+              X-Ray: {showLattice ? 'ON' : 'OFF'}
             </button>
             <button
               type="button"
               className={`btn btn-menu ${touchEnabled ? 'active' : ''}`}
               onClick={onToggleTouch}
             >
-              Pédales : {touchEnabled ? 'ON' : 'OFF'}
+              Touch: {touchEnabled ? 'ON' : 'OFF'}
             </button>
             <button
               type="button"
               className={`btn btn-menu ${bodyOpacity < 0.5 ? 'active' : ''}`}
               onClick={() => onChangeOpacity(bodyOpacity < 0.5 ? 1.0 : 0.35)}
             >
-              {bodyOpacity < 0.5 ? 'Carrosserie 100%' : 'Ghost 35%'}
+              {bodyOpacity < 0.5 ? 'Body 100%' : 'Ghost 35%'}
             </button>
           </div>
 

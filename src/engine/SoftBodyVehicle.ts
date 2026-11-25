@@ -1,4 +1,4 @@
-import { Box3, BufferAttribute, BufferGeometry, DoubleSide, Group, Material, Matrix4, Mesh, MeshPhysicalMaterial, MeshStandardMaterial, Object3D, Vector2, Vector3 } from 'three';
+import { Box3, BoxGeometry, BufferAttribute, BufferGeometry, CylinderGeometry, DoubleSide, Group, Material, Matrix4, Mesh, MeshPhysicalMaterial, MeshStandardMaterial, Object3D, TorusGeometry, Vector2, Vector3 } from 'three';
 import { CarProfile, createSedanProfile, createSupercarProfile } from './CarProfile';
 import { MeshDeformer, ensurePlainAttributes } from './MeshDeformer';
 import type { PrecomputedBindingData } from './MeshCacheDB';
@@ -14,6 +14,9 @@ import {
   SoftBodySolver, SolverBuildBeam, SolverBuildColtri, SolverBuildNode, SubstepForceProvider, Zone,
 } from './SoftBodySolver';
 import { GlassShatterSystem } from './GlassShatterSystem';
+import { FluidLeakSystem } from './FluidLeakSystem';
+
+const GEAR_RATIOS = [3.55, 2.42, 1.78, 1.36, 1.08, 0.88, 0.72] as const;
 
 /**
  * SoftBodyVehicle (JBeam High-Frequency Architecture)
@@ -46,8 +49,10 @@ export interface VehicleVisualSource {
   name: string;
   profile: CarProfile;
   parts: CarPart[];
-  /** Optional rigid interior cockpit / engine block meshes that move with the cabin root frame without per-vertex skinning. */
+  /** Optional rigid interior cockpit meshes that move with the cabin root frame without per-vertex skinning. */
   rigidMeshes?: Mesh[];
+  /** Optional 3D engine block meshes that physically push back, tilt, and deform on frontal/engine impact. */
+  engineMeshes?: Mesh[];
   /** Optional active rear spoiler / wing meshes animated by speed and airbrake braking. */
   spoilerMeshes?: Mesh[];
   /** Car-local pivot [x, y, z] for the active rear spoiler. */
@@ -76,6 +81,18 @@ export interface PartState {
   state: 'attached' | 'unlatched' | 'detached';
 }
 
+export interface VehicleMechanicalState {
+  engineHealth: number;
+  engineStalled: boolean;
+  frontAxleDamage: number;
+  rearAxleDamage: number;
+  steeringDamage: number;
+  steeringLocked: boolean;
+  steeringBiasDeg: number;
+  oilLeak: boolean;
+  coolantLeak: boolean;
+}
+
 export interface VehicleTelemetry {
   speedKmh: number;
   gear: string;
@@ -94,6 +111,7 @@ export interface VehicleTelemetry {
   brokenBeams: number;
   suspCompression: [number, number, number, number];
   damage: { front: number; cabin: number; rear: number; hood: number; bumpers: number; fenders: number; engine: number };
+  mech: VehicleMechanicalState;
   midRearEngine: boolean;
   parts: { label: string; state: string }[];
   nodes: number;
@@ -128,6 +146,7 @@ export class SoftBodyVehicle implements SubstepForceProvider {
   readonly profile: CarProfile;
   readonly root = new Group();
   readonly glass = new GlassShatterSystem();
+  readonly fluids = new FluidLeakSystem();
   readonly deformer: MeshDeformer;
   readonly parts: PartState[] = [];
   readonly input: VehicleInput = { throttle: 0, brake: 0, steer: 0, handbrake: 0 };
@@ -172,6 +191,19 @@ export class SoftBodyVehicle implements SubstepForceProvider {
   private readonly bodyNodeList: Uint16Array;
   private readonly isLatchBeam: Uint8Array;
   private readonly glassShattered = new Uint8Array(4); // 0: windshield, 1: left, 2: right, 3: rear
+  private readonly engineMount = new Group();
+  private readonly axleDmg = new Float32Array(4);
+  private engineDmg = 0;
+  private engineStalled = false;
+  private frontAxleDmg = 0;
+  private rearAxleDmg = 0;
+  private steeringDmg = 0;
+  private steeringBias = 0;
+  private steeringLocked = false;
+  private steeringLockAngle = 0;
+  private oilLeak = false;
+  private coolantLeak = false;
+  private misfirePhase = 0;
   private steerAngle = 0;
   private gear: 1 | -1 = 1;
   private autoGear = 1;
@@ -186,6 +218,9 @@ export class SoftBodyVehicle implements SubstepForceProvider {
   private rearImpacted = false;
   private leftImpacted = false;
   private rightImpacted = false;
+  private readonly doorAngle = new Float32Array(2);
+  private readonly doorAngVel = new Float32Array(2);
+  private readonly doorDent = new Float32Array(16);
   private spoilerGroup: Group | null = null;
   private spoilerPivot: [number, number, number] = [0, 0, 0];
   private spoilerDeploy = 0;
@@ -607,34 +642,40 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       addColQuad(SR[1], SR[0], bumperR[4], bumperR[2]);
     }
 
-    // ------------------------------------------------------------ Doors (4 x 2 = 8-node deformable grid per side)
+    // ------------------------------------------------------------ Doors (4 x 2 = 8-node rigid stamped-steel door panel per side)
     const doorCols = 4;
     const buildDoor = (side: 1 | -1, grp: DeformGroup): { low: number[]; high: number[]; all: number[] } => {
-      const zFront = P.cowlZ - 0.04;
-      const zRear = P.rearAxleZ + 0.42;
-      const yLow = 0.28 * hs;
+      const zFront = P.cowlZ - 0.05;
+      const zRear = P.rearAxleZ + 0.44;
+      const yLow = P.floorY + 0.16;
       const low: number[] = [];
       const high: number[] = [];
       for (let c = 0; c < doorCols; c++) {
         const z = zFront + (zRear - zFront) * (c / (doorCols - 1));
         const yHigh = P.beltY(z) - 0.025;
-        low.push(addNode(side * (P.sideHalfW(z, yLow) - 0.015), yLow, z, 1.8, grp, Zone.Fender, 0.085, 0.85));
-        high.push(addNode(side * (P.sideHalfW(z, yHigh) - 0.02), yHigh, z, 1.6, grp, Zone.Fender, 0.085, 0.85));
+        low.push(addNode(side * (P.sideHalfW(z, yLow) - 0.015), yLow, z, 2.2, grp, Zone.Longeron, 0.085, 0.85));
+        high.push(addNode(side * (P.sideHalfW(z, yHigh) - 0.02), yHigh, z, 2.0, grp, Zone.Longeron, 0.085, 0.85));
       }
       for (let c = 0; c < doorCols; c++) {
-        addBeam(low[c], high[c], Zone.Fender, BEAM_COLLIDE | BEAM_UNBREAKABLE, 0.95, 1.3, 0.85);
+        // Stiff stamped-steel door structure (firm, never floppy/rubbery)
+        addBeam(low[c], high[c], Zone.Longeron, BEAM_COLLIDE | BEAM_UNBREAKABLE, 1.35, 1.9, 1.35);
         if (c + 1 < doorCols) {
-          addBeam(low[c], low[c + 1], Zone.Fender, BEAM_COLLIDE | BEAM_UNBREAKABLE, 0.62, 1.3, 0.48);
-          addBeam(high[c], high[c + 1], Zone.Fender, BEAM_COLLIDE | BEAM_UNBREAKABLE, 0.62, 1.3, 0.48);
-          addBeam(low[c], high[c + 1], Zone.Fender, BEAM_COLLIDE | BEAM_UNBREAKABLE, 0.58, 1.3, 0.48);
-          addBeam(high[c], low[c + 1], Zone.Fender, BEAM_COLLIDE | BEAM_UNBREAKABLE, 0.58, 1.3, 0.48);
+          addBeam(low[c], low[c + 1], Zone.Longeron, BEAM_COLLIDE | BEAM_UNBREAKABLE, 1.25, 1.9, 1.2);
+          addBeam(high[c], high[c + 1], Zone.Longeron, BEAM_COLLIDE | BEAM_UNBREAKABLE, 1.25, 1.9, 1.2);
+          addBeam(low[c], high[c + 1], Zone.Longeron, BEAM_COLLIDE | BEAM_UNBREAKABLE, 1.15, 1.9, 1.2);
+          addBeam(high[c], low[c + 1], Zone.Longeron, BEAM_COLLIDE | BEAM_UNBREAKABLE, 1.15, 1.9, 1.2);
           addColQuad(low[c], low[c + 1], high[c + 1], high[c]);
         }
         if (c + 2 < doorCols) {
-          addBeam(low[c], low[c + 2], Zone.Fender, BEAM_UNBREAKABLE, 0.42, 1.3, 0.45);
-          addBeam(high[c], high[c + 2], Zone.Fender, BEAM_UNBREAKABLE, 0.42, 1.3, 0.45);
+          addBeam(low[c], low[c + 2], Zone.Longeron, BEAM_UNBREAKABLE, 1.05, 1.85, 1.15);
+          addBeam(high[c], high[c + 2], Zone.Longeron, BEAM_UNBREAKABLE, 1.05, 1.85, 1.15);
         }
       }
+      // Full-length door intrusion beam (keeps door frame rigid when swinging open)
+      addBeam(low[0], low[doorCols - 1], Zone.Longeron, BEAM_UNBREAKABLE, 1.15, 1.9, 1.25);
+      addBeam(high[0], high[doorCols - 1], Zone.Longeron, BEAM_UNBREAKABLE, 1.15, 1.9, 1.25);
+      addBeam(low[0], high[doorCols - 1], Zone.Longeron, BEAM_UNBREAKABLE, 1.05, 1.9, 1.25);
+      addBeam(high[0], low[doorCols - 1], Zone.Longeron, BEAM_UNBREAKABLE, 1.05, 1.9, 1.25);
       return { low, high, all: [...low, ...high] };
     };
     const doorL = buildDoor(1, DeformGroup.DoorL);
@@ -768,20 +809,20 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     const wireDoorAttachments = (part: PartState, door: { low: number[]; high: number[] }, sideGrp: DeformGroup, sideSign: 1 | -1) => {
       const isSideNode = (i: number) => nodes[i].group === sideGrp;
       const isInnerCabinFloor = (i: number) => nodes[i].group === NODE_BODY && nodes[i].y < P.floorY + 0.25 && nodes[i].x * sideSign >= -0.05;
-      // Front A-pillar hinge column (c = 0)
-      attach(part, door.low[0], 2, Zone.Hinge, 'hinge', 0, 1.05, 1.5, 0.95, isSideNode, 1.35);
-      attach(part, door.high[0], 2, Zone.Hinge, 'hinge', 0, 1.05, 1.5, 0.95, isSideNode, 1.35);
-      attach(part, door.low[0], 2, Zone.Hinge, 'hinge', 0, 0.75, 1.5, 0.95, isInnerCabinFloor, 1.35);
-      attach(part, door.high[0], 2, Zone.Hinge, 'hinge', 0, 0.70, 1.5, 0.95, isInnerCabinFloor, 1.35);
-      // Rear B-pillar latch column (c = 3)
-      attach(part, door.low[doorCols - 1], 2, Zone.Latch, 'latch', 0, 0.95, 1.4, 0.85, isSideNode, 1.15);
-      attach(part, door.high[doorCols - 1], 2, Zone.Latch, 'latch', 0, 0.95, 1.4, 0.85, isSideNode, 1.15);
-      attach(part, door.low[doorCols - 1], 2, Zone.Latch, 'latch', 0, 0.55, 1.4, 0.85, isInnerCabinFloor, 1.15);
-      // Middle door columns (c = 1, 2): breakable latch/crush clips so door unlatches cleanly when B-pillar latch yields
+      // Front A-pillar hinge column (c = 0) — welded solid (non-opening doors)
+      attach(part, door.low[0], 2, Zone.Hinge, 'hinge', BEAM_UNBREAKABLE, 1.05, 1.5, 0.95, isSideNode, 1.35);
+      attach(part, door.high[0], 2, Zone.Hinge, 'hinge', BEAM_UNBREAKABLE, 1.05, 1.5, 0.95, isSideNode, 1.35);
+      attach(part, door.low[0], 2, Zone.Hinge, 'hinge', BEAM_UNBREAKABLE, 0.75, 1.5, 0.95, isInnerCabinFloor, 1.35);
+      attach(part, door.high[0], 2, Zone.Hinge, 'hinge', BEAM_UNBREAKABLE, 0.70, 1.5, 0.95, isInnerCabinFloor, 1.35);
+      // Rear B-pillar latch column (c = 3) — welded solid
+      attach(part, door.low[doorCols - 1], 2, Zone.Latch, 'latch', BEAM_UNBREAKABLE, 0.95, 1.4, 0.85, isSideNode, 1.15);
+      attach(part, door.high[doorCols - 1], 2, Zone.Latch, 'latch', BEAM_UNBREAKABLE, 0.95, 1.4, 0.85, isSideNode, 1.15);
+      attach(part, door.low[doorCols - 1], 2, Zone.Latch, 'latch', BEAM_UNBREAKABLE, 0.55, 1.4, 0.85, isInnerCabinFloor, 1.15);
+      // Middle door columns (c = 1, 2) — welded solid
       for (let c = 1; c < doorCols - 1; c++) {
-        attach(part, door.low[c], 2, Zone.Latch, 'latch', BEAM_COLLIDE, 0.75, 1.35, 0.80, isSideNode, 1.25);
-        attach(part, door.high[c], 2, Zone.Latch, 'latch', BEAM_COLLIDE, 0.75, 1.35, 0.80, isSideNode, 1.25);
-        attach(part, door.low[c], 2, Zone.Latch, 'latch', 0, 0.42, 1.5, 0.80, isInnerCabinFloor, 1.25);
+        attach(part, door.low[c], 2, Zone.Latch, 'latch', BEAM_COLLIDE | BEAM_UNBREAKABLE, 0.75, 1.35, 0.80, isSideNode, 1.25);
+        attach(part, door.high[c], 2, Zone.Latch, 'latch', BEAM_COLLIDE | BEAM_UNBREAKABLE, 0.75, 1.35, 0.80, isSideNode, 1.25);
+        attach(part, door.low[c], 2, Zone.Latch, 'latch', BEAM_UNBREAKABLE, 0.42, 1.5, 0.80, isInnerCabinFloor, 1.25);
       }
     };
     const dl: PartState = { name: 'doorL', label: 'Left door', group: DeformGroup.DoorL, beams: [], hingeBeams: [], latchBeams: [], state: 'attached' };
@@ -933,6 +974,13 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         this.root.add(rm);
       }
     }
+    this.engineMount.name = 'engineMount';
+    if (src.engineMeshes && src.engineMeshes.length > 0) {
+      for (const em of src.engineMeshes) {
+        this.engineMount.add(em);
+      }
+    }
+    this.root.add(this.engineMount);
     if (src.spoilerMeshes && src.spoilerMeshes.length > 0 && src.spoilerPivot) {
       this.spoilerPivot = [src.spoilerPivot[0], src.spoilerPivot[1], src.spoilerPivot[2]];
       this.spoilerGroup = new Group();
@@ -953,6 +1001,17 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       impactKmh: 0, peakImpactKmh: 0, absorbedKJ: 0, brokenBeams: 0,
       suspCompression: [0, 0, 0, 0],
       damage: { front: 0, cabin: 0, rear: 0, hood: 0, bumpers: 0, fenders: 0, engine: 0 },
+      mech: {
+        engineHealth: 1,
+        engineStalled: false,
+        frontAxleDamage: 0,
+        rearAxleDamage: 0,
+        steeringDamage: 0,
+        steeringLocked: false,
+        steeringBiasDeg: 0,
+        oilLeak: false,
+        coolantLeak: false,
+      },
       midRearEngine: isMidRear,
       parts: this.parts.map((p) => ({ label: p.label, state: p.state })),
       nodes: n, beams: beams.length, skinnedVerts: 0,
@@ -1008,13 +1067,32 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     S.resetBeams();
     this.deformer.restore(this.restLocal);
     this.glass.reset();
+    this.fluids.reset();
     this.glassShattered.fill(0);
+    this.axleDmg.fill(0);
+    this.engineDmg = 0;
+    this.engineStalled = false;
+    this.frontAxleDmg = 0;
+    this.rearAxleDmg = 0;
+    this.steeringDmg = 0;
+    this.steeringBias = 0;
+    this.steeringLocked = false;
+    this.steeringLockAngle = 0;
+    this.oilLeak = false;
+    this.coolantLeak = false;
+    this.misfirePhase = 0;
+    this.engineMount.position.set(0, 0, 0);
+    this.engineMount.rotation.set(0, 0, 0);
+    this.engineMount.scale.set(1, 1, 1);
     for (const w of this.wheels) {
       w.s = this.suspTop; w.sPrev = this.suspTop; w.spin = 0; w.omega = 0; w.steer = 0; w.contact = false;
       w.bentCamber = 0; w.bentToe = 0; w.detached = false;
       w.knuckle.rotation.set(0, 0, 0);
     }
     for (const p of this.parts) p.state = 'attached';
+    this.doorAngle.fill(0);
+    this.doorAngVel.fill(0);
+    this.doorDent.fill(0);
     this.steerAngle = 0;
     this.gear = 1;
     this.autoGear = 1;
@@ -1102,16 +1180,22 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     const autoHold = !this.lateralSledActive && Math.abs(drive) < 0.02 && Math.abs(vForward) < 0.35 && this.autopilotSpeed === 0;
 
     const vSteer = Math.abs(vForward);
-    // Progressive speed-sensitive steering curve: agile at low speed, composed at highway speed
-    const maxSteer = 0.64 / (1 + Math.pow(vSteer / 14.5, 1.35));
-    const target = -inp.steer * maxSteer;
-    const isCentering = Math.abs(inp.steer) < 0.05 || Math.sign(target) !== Math.sign(this.steerAngle);
-    // Fast natural self-centering caster return increases with road speed
-    const sens = Math.max(0.45, Math.min(1.6, this.steeringSensitivity));
-    const steerRate = (isCentering
-      ? (5.4 + Math.min(4.0, vSteer * 0.22))
-      : (3.6 + (1 - Math.min(1, vSteer / 24)) * 1.6) * sens) * h;
-    this.steerAngle += Math.max(-steerRate, Math.min(steerRate, target - this.steerAngle));
+    // Progressive speed-sensitive steering curve + steering rack damage / lock after major front impacts
+    const rackEfficiency = Math.max(0.28, 1 - this.steeringDmg * 0.72);
+    const maxSteer = (0.64 / (1 + Math.pow(vSteer / 14.5, 1.35))) * rackEfficiency;
+    const rawTarget = -inp.steer * maxSteer + this.steeringBias;
+    if (this.steeringLocked) {
+      // Steering rack jammed solid — player input can barely flex the bent column (±0.035 rad)
+      const jammedTarget = this.steeringLockAngle - inp.steer * 0.035;
+      this.steerAngle += (jammedTarget - this.steerAngle) * Math.min(1, 14 * h);
+    } else {
+      const isCentering = Math.abs(inp.steer) < 0.05 || Math.sign(rawTarget - this.steeringBias) !== Math.sign(this.steerAngle - this.steeringBias);
+      const sens = Math.max(0.45, Math.min(1.6, this.steeringSensitivity)) * rackEfficiency;
+      const steerRate = (isCentering
+        ? (5.4 + Math.min(4.0, vSteer * 0.22)) * rackEfficiency
+        : (3.6 + (1 - Math.min(1, vSteer / 24)) * 1.6) * sens) * h;
+      this.steerAngle += Math.max(-steerRate, Math.min(steerRate, rawTarget - this.steerAngle));
+    }
 
     // True Ackermann geometry: inner front wheel turns tighter than outer wheel around the turn center
     let steerFL = 0, steerFR = 0;
@@ -1122,27 +1206,36 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       const inner = Math.atan(wb / Math.max(0.85, turnR - halfT));
       const outer = Math.atan(wb / (turnR + halfT));
       if (this.steerAngle > 0) {
-        // turning left (+X): left wheel is inner
         steerFL = inner;
         steerFR = outer;
       } else {
-        // turning right (-X): right wheel is inner
         steerFL = -outer;
         steerFR = -inner;
       }
     }
 
-    // ---- 7-speed transmission & shifting physics (torque curve, clutch cut, shift kick, engine braking)
-    const gearRatios = [3.55, 2.42, 1.78, 1.36, 1.08, 0.88, 0.72];
-    const gRatio = this.gear === -1 ? 3.1 : gearRatios[Math.max(0, Math.min(6, this.autoGear - 1))];
-    // Bell-shaped engine torque curve peaking between 4500–6200 RPM
+    // ---- 7-speed transmission & engine damage power loss / misfire / stall
+    const gRatio = this.gear === -1 ? 3.1 : GEAR_RATIOS[Math.max(0, Math.min(6, this.autoGear - 1))];
     const rpmNorm = Math.max(0, Math.min(1, (this.engineRpm - 850) / 6650));
     const torqueCurve = 0.68 + 0.36 * Math.sin(rpmNorm * Math.PI * 0.92);
-    // Clutch cut during gear shift (brief torque drop -> micro nose dip) followed by crisp clutch bite kick
     const clutchFactor = this.shiftTimer > 0 ? 0.08 : this.shiftKickTimer > 0 ? 1.18 : 1.0;
-    const rawDrive = Math.min(this.maxDriveForce, (this.enginePower / Math.max(4.5, Math.abs(vForward))) * torqueCurve * Math.min(1.25, 0.62 + gRatio * 0.22));
+    // Engine damage genuinely degrades acceleration, causes misfiring above 35%, and stalls completely at >= 82%
+    let enginePowerFactor = 1.0;
+    if (this.engineStalled) {
+      enginePowerFactor = 0;
+    } else if (this.engineDmg > 0.04) {
+      enginePowerFactor = Math.max(0.14, 1 - this.engineDmg * 0.88);
+      if (this.engineDmg > 0.35) {
+        this.misfirePhase += h * (28 + rpmNorm * 42);
+        const misfireDip = Math.sin(this.misfirePhase) > 0.45 ? (1 - this.engineDmg * 0.52) : 1.0;
+        enginePowerFactor *= misfireDip;
+      }
+    }
+    const rawDrive = Math.min(
+      this.maxDriveForce * Math.max(0.15, enginePowerFactor),
+      ((this.enginePower * enginePowerFactor) / Math.max(4.5, Math.abs(vForward))) * torqueCurve * Math.min(1.25, 0.62 + gRatio * 0.22),
+    );
     let driveForce = drive * rawDrive * clutchFactor * (this.gear === -1 ? 0.48 : 1);
-    // Realistic engine braking when coasting off-throttle in gear
     if (this.gear === 1 && drive < 0.02 && brakeIn < 0.02 && vForward > 2.5 && !this.lateralSledActive) {
       driveForce -= gRatio * (180 + vForward * 14);
     }
@@ -1253,9 +1346,12 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       if (Math.abs(Fy) > latCancel) Fy = Math.sign(Fy) * latCancel;
       if (this.lateralSledActive) Fy *= 0.03;
 
+      const axDmg = this.axleDmg[w];
       let Fx = 0;
       if (W.driven) {
-        let df = driveForce * 0.5;
+        // Damaged or broken half-shaft/axle cuts drive torque on this wheel
+        const halfShaftFactor = axDmg > 0.78 ? 0 : Math.max(0.15, 1 - axDmg * 0.88);
+        let df = driveForce * 0.5 * halfShaftFactor;
         if (this.tcsEnabled && Math.abs(slip) > 0.22 && Math.abs(df) > Fmax * 0.65) {
           df *= 0.62;
         }
@@ -1275,8 +1371,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         Fx = -Math.sign(vLong) * Math.min(Fmax * 0.82, longCancel);
         Fy *= 0.42;
       }
-      // rolling resistance (higher if wheel spindle is bent)
-      Fx -= vLong * (11 + Math.abs(W.bentCamber) * 65);
+      // rolling resistance (dramatically higher if wheel spindle/axle is bent or crushed)
+      Fx -= vLong * (11 + Math.abs(W.bentCamber) * 65 + axDmg * 140);
       // combined-slip friction circle
       const tot = Math.sqrt(Fx * Fx + Fy * Fy);
       if (tot > Fmax && tot > 0) { const k = Fmax / tot; Fx *= k; Fy *= k; }
@@ -1589,10 +1685,9 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     const redlineRpm = isHighRev ? 8500 : 7200;
     const rpmScale = isHighRev ? 3.85 : 3.35;
     const kmh = Math.abs(this.speed) * 3.6;
-    const gearRatios = [3.55, 2.42, 1.78, 1.36, 1.08, 0.88, 0.72];
     const gIdx = Math.max(0, Math.min(6, this.autoGear - 1));
     const wheelRpm = (kmh / 3.6) / Math.max(0.25, this.profile.wheelRadius) * (60 / (2 * Math.PI));
-    const coupledRpm = 850 + wheelRpm * gearRatios[gIdx] * rpmScale;
+    const coupledRpm = 850 + wheelRpm * GEAR_RATIOS[gIdx] * rpmScale;
     if (this.gear === 1 && this.shiftTimer <= 0) {
       const upshiftRpm = this.input.throttle > 0.65 ? redlineRpm - 320 : redlineRpm * 0.74;
       const downshiftRpm = this.input.throttle > 0.75 ? redlineRpm * 0.56 : redlineRpm * 0.34;
@@ -1607,12 +1702,79 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         this.engineRpm = Math.min(redlineRpm - 200, this.engineRpm + 1150);
       }
     }
-    const newRatio = gearRatios[Math.max(0, Math.min(6, this.autoGear - 1))];
-    const targetRpm = this.shiftTimer > 0
-      ? Math.max(1200, this.engineRpm * 0.92)
-      : 850 + wheelRpm * newRatio * rpmScale + this.input.throttle * (kmh < 6 ? 1600 : 260);
-    this.engineRpm += (Math.min(redlineRpm, targetRpm) - this.engineRpm) * 0.24;
+    const newRatio = GEAR_RATIOS[Math.max(0, Math.min(6, this.autoGear - 1))];
+    const effectiveRedline = redlineRpm * Math.max(0.45, 1 - this.engineDmg * 0.42);
+    const targetRpm = this.engineStalled
+      ? 0
+      : this.shiftTimer > 0
+        ? Math.max(1200, this.engineRpm * 0.92)
+        : 850 + wheelRpm * newRatio * rpmScale + this.input.throttle * (kmh < 6 ? 1600 : 260) * Math.max(0.2, 1 - this.engineDmg * 0.75);
+    this.engineRpm += (Math.min(effectiveRedline, targetRpm) - this.engineRpm) * 0.24;
     this.updateParts();
+    this.updateMechanicalDamage();
+  }
+
+  /** Updates engine pushback/stall, axle/half-shaft damage, steering rack lock, and fluid leak flags (60 Hz, zero GC). */
+  private updateMechanicalDamage(): void {
+    const S = this.solver;
+    const frontDmg = Math.min(1, (S.zoneDamageRatio(Zone.Crumple) + S.zoneDamageRatio(Zone.Longeron)) * 0.75);
+    const rearDmg = S.zoneDamageRatio(Zone.Trunk);
+    const engSubDmg = S.zoneDamageRatio(Zone.EngineSubframe);
+    const hoodDmg = S.zoneDamageRatio(Zone.Hood);
+    const cabinDmg = S.zoneDamageRatio(Zone.Cabin) * 2;
+    const isMidRear = this.telemetry.midRearEngine;
+
+    const computedEngDmg = isMidRear
+      ? Math.min(1, rearDmg * 0.75 + engSubDmg * 0.65 + cabinDmg * 0.22)
+      : Math.min(1, frontDmg * 0.72 + engSubDmg * 0.70 + hoodDmg * 0.22);
+    if (computedEngDmg > this.engineDmg) this.engineDmg = computedEngDmg;
+    if (this.engineDmg >= 0.80) {
+      this.engineStalled = true;
+    }
+
+    // Fluid leaks: radiator coolant leaks on front crush, motor oil leaks on engine block/pan damage
+    if (!this.coolantLeak && (frontDmg > 0.26 || (isMidRear && rearDmg > 0.34))) {
+      this.coolantLeak = true;
+    }
+    if (!this.oilLeak && this.engineDmg > 0.24) {
+      this.oilLeak = true;
+    }
+
+    // Per-wheel axle / half-shaft damage (from suspension beam breakage & bent camber/toe)
+    const flags = S.flags;
+    for (let w = 0; w < 4; w++) {
+      const W = this.wheels[w];
+      if (W.detached) {
+        this.axleDmg[w] = 1.0;
+        continue;
+      }
+      let brokenSusp = 0;
+      for (let k = 0; k < W.suspBeams.length; k++) {
+        if (flags[W.suspBeams[k]] & BEAM_BROKEN) brokenSusp++;
+      }
+      const bendDmg = Math.min(1, (Math.abs(W.bentCamber) * 2.1 + Math.abs(W.bentToe) * 2.4));
+      const zoneExtra = W.front ? frontDmg * 0.45 : rearDmg * 0.45;
+      const d = Math.min(1, Math.max(bendDmg, brokenSusp / Math.max(1, W.suspBeams.length)) * 0.85 + zoneExtra);
+      if (d > this.axleDmg[w]) this.axleDmg[w] = d;
+    }
+    this.frontAxleDmg = Math.max(this.axleDmg[0], this.axleDmg[1]);
+    this.rearAxleDmg = Math.max(this.axleDmg[2], this.axleDmg[3]);
+
+    // Steering rack damage, permanent tie-rod pull bias, and steering lock on severe front/wheel crash
+    const fl = this.wheels[0], fr = this.wheels[1];
+    const toeAsym = (fl.bentToe + fr.bentToe) * 0.55;
+    const targetBias = Math.max(-0.34, Math.min(0.34, toeAsym + (this.axleDmg[0] - this.axleDmg[1]) * 0.22));
+    if (Math.abs(targetBias) > Math.abs(this.steeringBias)) {
+      this.steeringBias = targetBias;
+    }
+    const steerDmgNow = Math.min(1, this.frontAxleDmg * 0.72 + frontDmg * 0.55);
+    if (steerDmgNow > this.steeringDmg) this.steeringDmg = steerDmgNow;
+    if (!this.steeringLocked && (this.steeringDmg >= 0.70 || frontDmg >= 0.66 || fl.detached || fr.detached)) {
+      this.steeringLocked = true;
+      // Lock the steering rack at the current bent/impacted wheel angle (with minimum noticeable jam offset)
+      const jamBase = Math.abs(this.steerAngle) > 0.12 ? this.steerAngle : (this.steeringBias >= 0 ? 0.24 : -0.24);
+      this.steeringLockAngle = Math.max(-0.48, Math.min(0.48, jamBase));
+    }
   }
 
   private stabilizeIsolatedPanels(): void {
@@ -1692,6 +1854,115 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         S.zoneDamage[Zone.Trunk] = 0;
         for (let b = 0; b < S.beamCount; b++) {
           if (S.zone[b] === Zone.Trunk) S.rest[b] = S.rest0[b];
+        }
+      }
+    }
+
+    // Zero-jelly rigid stamped-steel door solver (closed = locked to body frame, unlatched = single rigid
+    // hinge angle strictly clamped to 0°..58° around A-pillar pivot, preserving permanent inward side-impact dents).
+    const MAX_DOOR_RAD = 1.012; // 58 degrees
+    for (let dSide = 0; dSide < 2; dSide++) {
+      const doorPart = this.parts[dSide === 0 ? 4 : 5];
+      if (doorPart.state === 'detached') continue;
+      const sideSign = dSide === 0 ? 1 : -1;
+      const sideImpacted = dSide === 0 ? this.leftImpacted : this.rightImpacted;
+      const dNodes = dSide === 0 ? this.doorLNodes : this.doorRNodes;
+      const nCols = dNodes.low.length;
+      const dentBase = dSide * 8;
+      const hLow = dNodes.low[0];
+      const hHigh = dNodes.high[0];
+      const hx = 0.5 * (R[hLow * 3] + R[hHigh * 3]);
+      const hz = 0.5 * (R[hLow * 3 + 2] + R[hHigh * 3 + 2]);
+
+      if (doorPart.state === 'attached') {
+        this.doorAngle[dSide] = 0;
+        this.doorAngVel[dSide] = 0;
+        // Closed door: lock rigidly to rest body frame (preserving any direct side-impact inward dent)
+        for (let c = 0; c < nCols; c++) {
+          for (let row = 0; row < 2; row++) {
+            const ni = row === 0 ? dNodes.low[c] : dNodes.high[c];
+            const dentSlot = dentBase + c * 2 + row;
+            const rx = R[ni * 3], ry = R[ni * 3 + 1], rz = R[ni * 3 + 2];
+            if (sideImpacted && S.cObstacle[ni]) {
+              const dxw = px[ni] - ox, dyw = py[ni] - oy, dzw = pz[ni] - oz;
+              const lx = dxw * Xx + dyw * Xy + dzw * Xz;
+              const inward = sideSign * (lx - rx); // negative = dented inward toward cabin
+              if (inward < this.doorDent[dentSlot]) {
+                this.doorDent[dentSlot] = Math.max(-0.26, inward);
+              }
+            }
+            const targetLx = rx + sideSign * this.doorDent[dentSlot];
+            const tx = ox + Xx * targetLx + Yx * ry + Zx * rz;
+            const ty = oy + Xy * targetLx + Yy * ry + Zy * rz;
+            const tz = oz + Xz * targetLx + Yz * ry + Zz * rz;
+            const blend = S.cObstacle[ni] ? 0.55 : 0.96;
+            px[ni] += (tx - px[ni]) * blend;
+            py[ni] += (ty - py[ni]) * blend;
+            pz[ni] += (tz - pz[ni]) * blend;
+            vx[ni] += (bvx - vx[ni]) * 0.85;
+            vy[ni] += (bvy - vy[ni]) * 0.85;
+            vz[ni] += (bvz - vz[ni]) * 0.85;
+          }
+        }
+        continue;
+      }
+
+      // Unlatched door: compute ONE rigid hinge angle from rear latch nodes (no per-node twisting/jelly!)
+      let sumOut = 0, sumBack = 0;
+      const startCol = Math.max(1, nCols - 2);
+      for (let c = startCol; c < nCols; c++) {
+        for (let row = 0; row < 2; row++) {
+          const ni = row === 0 ? dNodes.low[c] : dNodes.high[c];
+          const dxw = px[ni] - ox, dyw = py[ni] - oy, dzw = pz[ni] - oz;
+          const lx = dxw * Xx + dyw * Xy + dzw * Xz;
+          const lz = dxw * Zx + dyw * Zy + dzw * Zz;
+          sumOut += sideSign * (lx - hx);
+          sumBack += hz - lz;
+        }
+      }
+      let measuredTheta = Math.atan2(sumOut, Math.max(0.10, sumBack));
+      if (measuredTheta < 0) measuredTheta = 0;
+      else if (measuredTheta > MAX_DOOR_RAD) measuredTheta = MAX_DOOR_RAD;
+
+      // Damped heavy-steel hinge dynamics with hard check-strap stops at 0° and 58°
+      const curAngle = this.doorAngle[dSide];
+      let angVel = this.doorAngVel[dSide] * 0.88 + (measuredTheta - curAngle) * 0.35;
+      let nextAngle = curAngle + angVel;
+      if (nextAngle <= 0) { nextAngle = 0; if (angVel < 0) angVel = 0; }
+      else if (nextAngle >= MAX_DOOR_RAD) { nextAngle = MAX_DOOR_RAD; if (angVel > 0) angVel = 0; }
+      this.doorAngle[dSide] = nextAngle;
+      this.doorAngVel[dSide] = angVel;
+
+      const sinT = Math.sin(nextAngle);
+      const cosT = Math.cos(nextAngle);
+      for (let c = 0; c < nCols; c++) {
+        for (let row = 0; row < 2; row++) {
+          const ni = row === 0 ? dNodes.low[c] : dNodes.high[c];
+          const dentSlot = dentBase + c * 2 + row;
+          const restDz = hz - R[ni * 3 + 2]; // positive rearward lever arm from hinge
+          const restDx = sideSign * (R[ni * 3] - hx); // local thickness/contour offset from hinge plane
+          const restY = R[ni * 3 + 1];
+          const dent = this.doorDent[dentSlot]; // <= 0 permanent inward crease
+          const effOut = restDx + dent;
+
+          // Rigid rotation of (effOut, -restDz) around the vertical A-pillar hinge axis
+          const rotOut = effOut * cosT + restDz * sinT;
+          const rotBack = restDz * cosT - effOut * sinT;
+          const targetLx = hx + sideSign * rotOut;
+          const targetLz = hz - rotBack;
+
+          const tx = ox + Xx * targetLx + Yx * restY + Zx * targetLz;
+          const ty = oy + Xy * targetLx + Yy * restY + Zy * targetLz;
+          const tz = oz + Xz * targetLx + Yz * restY + Zz * targetLz;
+
+          // Strong rigid-steel projection (0.97) completely eliminates jelly wobble
+          const blend = S.cObstacle[ni] ? 0.65 : 0.97;
+          px[ni] += (tx - px[ni]) * blend;
+          py[ni] += (ty - py[ni]) * blend;
+          pz[ni] += (tz - pz[ni]) * blend;
+          vx[ni] += (bvx - vx[ni]) * 0.80;
+          vy[ni] += (bvy - vy[ni]) * 0.88;
+          vz[ni] += (bvz - vz[ni]) * 0.80;
         }
       }
     }
@@ -1800,40 +2071,9 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         continue;
       }
 
-      // Doors: B-pillar latches break -> swings ajar ('unlatched'); A-pillar hinges shear -> tears off ('detached')
+      // Doors remain permanently welded/closed (no opening doors)
       if (p.group === DeformGroup.DoorL || p.group === DeformGroup.DoorR) {
-        const isLeft = p.group === DeformGroup.DoorL;
-        const sideHit = isLeft ? this.leftImpacted : this.rightImpacted;
-        if (!sideHit && S.peakImpact < 16.0) {
-          p.state = 'attached';
-          continue;
-        }
-        let hingeBroken = 0;
-        for (let k = 0; k < p.hingeBeams.length; k++) if (flags[p.hingeBeams[k]] & BEAM_BROKEN) hingeBroken++;
-        let latchBroken = 0;
-        for (let k = 0; k < p.latchBeams.length; k++) if (flags[p.latchBeams[k]] & BEAM_BROKEN) latchBroken++;
-
-        if ((p.hingeBeams.length > 0 && hingeBroken >= Math.ceil(p.hingeBeams.length * 0.6)) || (sideHit && latchBroken >= 3 && S.lastImpact > 31.0)) {
-          for (let k = 0; k < p.beams.length; k++) flags[p.beams[k]] |= BEAM_BROKEN;
-          p.state = 'detached';
-        } else if (latchBroken >= 2 || (sideHit && S.lastImpact > 14.5)) {
-          const wasAttached = p.state === 'attached';
-          for (let k = 0; k < p.latchBeams.length; k++) flags[p.latchBeams[k]] |= BEAM_BROKEN;
-          p.state = 'unlatched';
-          if (wasAttached) {
-            const sideSign = isLeft ? 1 : -1;
-            const dNodes = isLeft ? this.doorLNodes : this.doorRNodes;
-            for (let c = 1; c < dNodes.low.length; c++) {
-              const pop = 1.65 * (c / (dNodes.low.length - 1)) * sideSign;
-              for (let row = 0; row < 2; row++) {
-                const ni = row === 0 ? dNodes.low[c] : dNodes.high[c];
-                S.vx[ni] += F[3] * pop;
-                S.vy[ni] += F[4] * pop;
-                S.vz[ni] += F[5] * pop;
-              }
-            }
-          }
-        }
+        p.state = 'attached';
         continue;
       }
 
@@ -1950,6 +2190,36 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.deformer.update(L);
     this.glass.update(frameDt, S.world);
 
+    // Physical 3D engine pushback, broken-mount drop, tilt & crush deformation on impact
+    const engD = this.engineDmg;
+    if (engD > 0.01) {
+      const pushDir = this.telemetry.midRearEngine ? 1 : -1;
+      const pushZ = pushDir * engD * 0.44;
+      const dropY = -engD * 0.095;
+      const asym = this.axleDmg[0] - this.axleDmg[1];
+      this.engineMount.position.set(asym * 0.07, dropY, pushZ);
+      this.engineMount.rotation.set(pushDir * engD * 0.24, asym * 0.14, asym * 0.22);
+      this.engineMount.scale.set(1 + engD * 0.05, 1 + engD * 0.07, Math.max(0.72, 1 - engD * 0.26));
+    }
+
+    // Emit 3D asphalt oil/coolant puddles & rising radiator steam / engine smoke from engine bay
+    const engLocalZ = this.telemetry.midRearEngine ? this.profile.rearAxleZ + 0.35 : this.profile.frontAxleZ + 0.28;
+    const engLocalY = this.profile.floorY + 0.32;
+    const engWx = ox + F[6] * engLocalY + F[9] * engLocalZ;
+    const engWy = oy + F[7] * engLocalY + F[10] * engLocalZ;
+    const engWz = oz + F[8] * engLocalY + F[11] * engLocalZ;
+    this.fluids.update(
+      frameDt,
+      S.world,
+      engWx,
+      engWy,
+      engWz,
+      this.coolantLeak,
+      this.oilLeak,
+      engD,
+      Math.abs(this.speed),
+    );
+
     const chassisYaw = Math.atan2(F[9], F[11]);
     for (let w = 0; w < 4; w++) {
       const Wh = this.wheels[w];
@@ -1980,7 +2250,9 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         ay + Wh.hardLocal[1] - Wh.anchorRest[1] - s,
         az + Wh.hardLocal[2] - Wh.anchorRest[2],
       );
-      Wh.knuckle.rotation.set(0, Wh.steer, Wh.left ? -Wh.bentCamber : Wh.bentCamber);
+      // Visible bent-axle wheel wobble when spinning
+      const wobble = this.axleDmg[w] > 0.15 ? Math.sin(Wh.spin) * this.axleDmg[w] * 0.14 : 0;
+      Wh.knuckle.rotation.set(0, Wh.steer + wobble * 0.65, (Wh.left ? -Wh.bentCamber : Wh.bentCamber) + wobble);
     }
     if (this.spoilerGroup) {
       const speedKmh = Math.abs(this.speed) * 3.6;
@@ -2084,10 +2356,16 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     T.damage.hood = S.zoneDamageRatio(Zone.Hood);
     T.damage.bumpers = S.zoneDamageRatio(Zone.Bumper);
     T.damage.fenders = S.zoneDamageRatio(Zone.Fender);
-    const engSubDmg = S.zoneDamageRatio(Zone.EngineSubframe);
-    T.damage.engine = T.midRearEngine
-      ? Math.min(1, T.damage.rear * 0.75 + engSubDmg * 0.5 + T.damage.cabin * 0.2)
-      : Math.min(1, T.damage.front * 0.72 + engSubDmg * 0.5 + T.damage.hood * 0.25);
+    T.damage.engine = this.engineDmg;
+    T.mech.engineHealth = Math.max(0, 1 - this.engineDmg);
+    T.mech.engineStalled = this.engineStalled;
+    T.mech.frontAxleDamage = this.frontAxleDmg;
+    T.mech.rearAxleDamage = this.rearAxleDmg;
+    T.mech.steeringDamage = this.steeringDmg;
+    T.mech.steeringLocked = this.steeringLocked;
+    T.mech.steeringBiasDeg = Math.round((this.steeringLocked ? this.steeringLockAngle : this.steeringBias) * (180 / Math.PI));
+    T.mech.oilLeak = this.oilLeak;
+    T.mech.coolantLeak = this.coolantLeak;
     for (let i = 0; i < this.parts.length; i++) T.parts[i].state = this.parts[i].state;
     T.skinnedVerts = this.deformer.lastSkinnedVerts;
     return T;
@@ -2123,6 +2401,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
   dispose(): void {
     this.root.removeFromParent();
     this.glass.dispose();
+    this.fluids.group.removeFromParent();
+    this.fluids.dispose();
     this.src.dispose();
     if (this.wheelGeo) {
       this.wheelGeo.tire.dispose(); this.wheelGeo.rim.dispose(); this.wheelGeo.disc.dispose(); this.wheelGeo.caliper.dispose();
@@ -2193,7 +2473,7 @@ export function createProceduralVehicleSource(
  * Rear Bumper/Diffuser, Left/Right Doors, Fenders & Body) to DeformGroups,
  * and consolidates draw calls per (DeformGroup, Material) for 60 FPS tablet performance.
  */
-export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?: number): VehicleVisualSource {
+export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?: number, overridePaint?: number): VehicleVisualSource {
   root.updateMatrixWorld(true);
   const rawMeshes: { mesh: Mesh; geo: BufferGeometry; path: string }[] = [];
   root.traverse((obj) => {
@@ -2710,14 +2990,39 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
   }
 
   // Ensure every GLB material is visible, properly lit (envMapIntensity), and opaque unless glass/alpha-blended
+  const isDodgeDemon = /dodge|demon|challenger/i.test(name);
   const defaultPaint = paintColor ?? (isSupercar ? 0xe06a10 : 0x8a9299);
   const materials = createCarMaterials(defaultPaint);
   const paintMaterials: MeshStandardMaterial[] = [materials.paint];
   const taillightMaterials: MeshStandardMaterial[] = [];
   const seenMats = new Set<Material>();
   const replacedMats = new Map<Material, Material>();
+  const dodgeGlassMat = isDodgeDemon
+    ? new MeshPhysicalMaterial({
+        name: 'DodgeTintedGlass',
+        color: 0x16202a,
+        metalness: 0.14,
+        roughness: 0.05,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.03,
+        reflectivity: 1.0,
+        transparent: true,
+        opacity: 0.32,
+        envMapIntensity: 1.85,
+        depthWrite: false,
+        side: DoubleSide,
+      })
+    : null;
+
   for (const e of bodyEntries) {
     const list = Array.isArray(e.mat) ? e.mat : [e.mat];
+    const ec = new Vector3();
+    e.box.getCenter(ec);
+    const inGreenhouse =
+      e.box.max.y > profile.beltY(0) + 0.04 &&
+      ec.z >= profile.deckZ - 0.25 &&
+      ec.z <= profile.cowlZ + 0.25;
+
     for (let mi = 0; mi < list.length; mi++) {
       const m = list[mi];
       if (!m) continue;
@@ -2730,6 +3035,23 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
       seenMats.add(m);
       m.visible = true;
       const sm = m as MeshStandardMaterial;
+      const matTag = `${sm.name || ''} ${e.path}`;
+      const isWindowName = /glass|glss|window|windshield|windscreen|vitre|cab_glass|tinted/i.test(matTag) && !/light|lamp|headlight|taillight|redglass|fog/i.test(matTag);
+      const isDarkOpaqueGreenhouse =
+        isDodgeDemon &&
+        inGreenhouse &&
+        sm.isMeshStandardMaterial &&
+        !sm.map &&
+        !/paint|cars|body|trim|rubber|carbon|chrome|metal|wheel|tire|rim|interior|seat|dash/i.test(matTag) &&
+        sm.color &&
+        (sm.color.r + sm.color.g + sm.color.b) < 0.22;
+
+      if (isDodgeDemon && dodgeGlassMat && (isWindowName || isDarkOpaqueGreenhouse)) {
+        replacedMats.set(m, dodgeGlassMat);
+        list[mi] = dodgeGlassMat;
+        continue;
+      }
+
       const isGlassOrAlpha = /glass|glss|window|alpha|grid|detail|decal|light/i.test(sm.name) || Boolean(sm.alphaMap);
       if (!isGlassOrAlpha && sm.opacity < 0.99 && !sm.transparent) {
         sm.opacity = 1.0;
@@ -2745,7 +3067,7 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
         sm.roughness = Math.min(sm.roughness ?? 0.08, 0.06);
         sm.envMapIntensity = 1.9;
       }
-      if (/^(Car_?paint|CARS|carpaint_second)$/i.test(sm.name)) {
+      if (/^(Car_?paint|Car_?Paint_?\.?\d*|CARS|carpaint_second)$/i.test(sm.name)) {
         const phys = new MeshPhysicalMaterial({
           name: sm.name,
           color: sm.color.clone(),
@@ -2765,8 +3087,9 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
           transparent: false,
           opacity: 1.0,
         });
-        // Preserve factory paint color on BMW & Dodge, apply defaultPaint for untextured McLaren Carpaint
-        if (/^Carpaint$/i.test(sm.name)) phys.color.setHex(defaultPaint);
+        // Apply user-picked color override to any car, or defaultPaint for untextured McLaren Carpaint
+        if (overridePaint !== undefined) phys.color.setHex(overridePaint);
+        else if (/^Carpaint$/i.test(sm.name)) phys.color.setHex(defaultPaint);
         replacedMats.set(m, phys);
         list[mi] = phys;
         paintMaterials.push(phys);
@@ -2809,41 +3132,161 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
     else if (list.length === 1) e.mat = list[0];
   }
 
-  const hasExplicitFrontBumper = bodyEntries.some((e) => /(?:^|\/)(FRONT_BUMPER|g_Bumper_F)(?:\/|$)/i.test(e.path));
-  const hasExplicitRearBumper = bodyEntries.some((e) => /(?:^|\/)(REAR_BUMPER|g_Diffuser)(?:\/|$)/i.test(e.path));
+  // Auto-detect dedicated factory panel sub-meshes (doors, hood, trunk, bumpers) by geometry envelope
+  // so models with unnamed Blender meshes (e.g. Circle053_Car_Paint_0, Object_101) follow exact factory seams!
+  const hasHollowCenter = (geo: BufferGeometry, centerHalfX: number): boolean => {
+    const pos = geo.getAttribute('position');
+    if (!pos || pos.count === 0) return false;
+    const step = Math.max(1, Math.floor(pos.count / 250));
+    for (let i = 0; i < pos.count; i += step) {
+      if (Math.abs(pos.getX(i)) < centerHalfX) return false;
+    }
+    return true;
+  };
+
+  const halfW = profile.width * 0.5;
+  const factoryGroupByIdx = new Map<number, DeformGroup | 'DOOR_LR'>();
+  let factoryDoorMinZ = Infinity, factoryDoorMaxZ = -Infinity;
+  let factoryDoorMinY = Infinity, factoryDoorMaxY = -Infinity;
+  let detectedFactoryDoors = false;
+  let detectedFactoryHood = false;
+  let detectedFactoryTrunk = false;
+  let detectedFactoryFrontBumper = false;
+  let detectedFactoryRearBumper = false;
+
+  for (let idx = 0; idx < bodyEntries.length; idx++) {
+    const e = bodyEntries[idx];
+    const b = e.box;
+    const xSpan = b.max.x - b.min.x;
+    const zSpan = b.max.z - b.min.z;
+    const maxAbsX = Math.max(Math.abs(b.min.x), Math.abs(b.max.x));
+    const isOneSideDoor = (b.min.x > halfW * 0.35 || b.max.x < -halfW * 0.35);
+    const isMirroredLR = b.min.x < -halfW * 0.72 && b.max.x > halfW * 0.72 && hasHollowCenter(e.geo, halfW * 0.42);
+
+    // 1. Dedicated factory door panel mesh (single side or mirrored L+R with hollow center)
+    if (
+      b.min.z > -profile.halfL * 0.42 &&
+      b.max.z < profile.halfL * 0.48 &&
+      zSpan > profile.halfL * 0.28 &&
+      b.min.y > 0.12 * yS &&
+      b.max.y < 0.80 * yS &&
+      maxAbsX > halfW * 0.72 &&
+      (isOneSideDoor || isMirroredLR)
+    ) {
+      factoryGroupByIdx.set(idx, isMirroredLR ? 'DOOR_LR' : (b.min.x > 0 ? DeformGroup.DoorL : DeformGroup.DoorR));
+      detectedFactoryDoors = true;
+      if (b.min.z < factoryDoorMinZ) factoryDoorMinZ = b.min.z;
+      if (b.max.z > factoryDoorMaxZ) factoryDoorMaxZ = b.max.z;
+      if (b.min.y < factoryDoorMinY) factoryDoorMinY = b.min.y;
+      if (b.max.y > factoryDoorMaxY) factoryDoorMaxY = b.max.y;
+      continue;
+    }
+
+    // 2. Dedicated factory front bumper
+    if (
+      b.min.z > profile.halfL * 0.62 &&
+      b.max.z > profile.halfL * 0.88 &&
+      b.max.y < 0.60 * yS &&
+      xSpan > profile.width * 0.55
+    ) {
+      factoryGroupByIdx.set(idx, DeformGroup.BumperF);
+      detectedFactoryFrontBumper = true;
+      continue;
+    }
+
+    // 3. Dedicated factory rear bumper
+    if (
+      b.max.z < -profile.halfL * 0.58 &&
+      b.min.z < -profile.halfL * 0.88 &&
+      b.max.y < 0.62 * yS &&
+      xSpan > profile.width * 0.55
+    ) {
+      factoryGroupByIdx.set(idx, DeformGroup.BumperR);
+      detectedFactoryRearBumper = true;
+      continue;
+    }
+
+    // 4. Dedicated factory hood
+    if (
+      b.min.z > profile.halfL * 0.22 &&
+      b.max.z > profile.halfL * 0.78 &&
+      b.min.y > 0.42 * yS &&
+      b.max.y < 0.78 * yS &&
+      zSpan > profile.halfL * 0.42 &&
+      xSpan > profile.width * 0.45
+    ) {
+      factoryGroupByIdx.set(idx, DeformGroup.Hood);
+      detectedFactoryHood = true;
+      continue;
+    }
+
+    // 5. Dedicated factory trunk lid
+    if (
+      b.max.z < -profile.halfL * 0.62 &&
+      b.min.z < -profile.halfL * 0.86 &&
+      b.min.y > 0.54 * yS &&
+      b.max.y < 0.84 * yS &&
+      xSpan > profile.width * 0.35
+    ) {
+      factoryGroupByIdx.set(idx, DeformGroup.Trunk);
+      detectedFactoryTrunk = true;
+    }
+  }
+
+  // Group door-mounted side mirrors & exterior door handles with their respective door so they swing open together
+  if (detectedFactoryDoors) {
+    for (let idx = 0; idx < bodyEntries.length; idx++) {
+      if (factoryGroupByIdx.has(idx)) continue;
+      const e = bodyEntries[idx];
+      const b = e.box;
+      const zSpan = b.max.z - b.min.z;
+      const maxAbsX = Math.max(Math.abs(b.min.x), Math.abs(b.max.x));
+      if (
+        zSpan < profile.halfL * 0.38 &&
+        b.min.z >= factoryDoorMinZ - 0.10 &&
+        b.max.z <= factoryDoorMaxZ + 0.10 &&
+        b.min.y >= factoryDoorMinY - 0.04 &&
+        b.max.y <= factoryDoorMaxY + 0.22 &&
+        maxAbsX > halfW * 0.78 &&
+        hasHollowCenter(e.geo, halfW * 0.65)
+      ) {
+        const isLR = b.min.x < 0 && b.max.x > 0;
+        factoryGroupByIdx.set(idx, isLR ? 'DOOR_LR' : (b.min.x > 0 ? DeformGroup.DoorL : DeformGroup.DoorR));
+      }
+    }
+  }
+
+  const hasExplicitFrontBumper = detectedFactoryFrontBumper || bodyEntries.some((e) => /(?:^|\/)(FRONT_BUMPER|g_Bumper_F)(?:\/|$)|(bumper|splitter).*(front|f\b)/i.test(e.path));
+  const hasExplicitRearBumper = detectedFactoryRearBumper || bodyEntries.some((e) => /(?:^|\/)(REAR_BUMPER|g_Diffuser)(?:\/|$)|(bumper|diffuser|valance).*(rear|back|r\b)/i.test(e.path));
+  const hasExplicitHood = detectedFactoryHood || bodyEntries.some((e) => /(?:^|\/)(HOOD|GEO_HOOD|bonnet|frunk)(?:\/|$)/i.test(e.path));
+  const hasExplicitTrunk = detectedFactoryTrunk || bodyEntries.some((e) => /(?:^|\/)(MOTORHOOD|trunk|boot|tailgate|decklid)(?:\/|$)/i.test(e.path));
 
   const classifyPath = (p: string): DeformGroup | null => {
     if (/(?:^|\/)(HOOD|GEO_HOOD|bonnet|frunk)(?:\/|$)/i.test(p)) return DeformGroup.Hood;
     if (/(?:^|\/)(MOTORHOOD|trunk|boot|tailgate|decklid)(?:\/|$)/i.test(p)) return DeformGroup.Trunk;
     if (/(?:^|\/)(FRONT_BUMPER|g_Bumper_F)(?:\/|$)|(bumper|grille|splitter|lip).*(front|f\b)|(front|f\b).*(bumper|grille|splitter)/i.test(p)) return DeformGroup.BumperF;
     if (/(?:^|\/)(REAR_BUMPER|g_Diffuser)(?:\/|$)|(bumper|diffuser|valance).*(rear|back|r\b)|(rear|back|r\b).*(bumper|diffuser)/i.test(p)) return DeformGroup.BumperR;
-    if (/DOOR_L1\/GEO_DOOR_RR/i.test(p)) return DeformGroup.DoorR;
-    if (/DOOR_R1\/polymsh5/i.test(p)) return DeformGroup.DoorL;
-    if (/(?:^|\/)(DOOR_L1|DOOR_L|GEO_DOOR_L)(?:\/|$)/i.test(p)) return DeformGroup.DoorL;
-    if (/(?:^|\/)(DOOR_R1|DOOR_R|GEO_DOOR_R1)(?:\/|$)/i.test(p)) return DeformGroup.DoorR;
-    if (/(?:^|\/)(GEO_frontFender_L|fender_l|quarter_l|side_l|sill_l)(?:\/|$)/i.test(p)) return DeformGroup.SideL;
-    if (/(?:^|\/)(GEO_frontFender_R|fender_r|quarter_r|side_r|sill_r)(?:\/|$)/i.test(p)) return DeformGroup.SideR;
+    // Doors are welded seamlessly into SideL/SideR (non-opening doors)
+    if (/DOOR_L1\/GEO_DOOR_RR/i.test(p)) return DeformGroup.SideR;
+    if (/DOOR_R1\/polymsh5/i.test(p)) return DeformGroup.SideL;
+    if (/(?:^|\/)(DOOR_L1|DOOR_L|GEO_DOOR_L|door_left|porte_g|GEO_frontFender_L|fender_l|quarter_l|side_l|sill_l)(?:\/|$)/i.test(p)) return DeformGroup.SideL;
+    if (/(?:^|\/)(DOOR_R1|DOOR_R|GEO_DOOR_R1|door_right|porte_d|GEO_frontFender_R|fender_r|quarter_r|side_r|sill_r)(?:\/|$)/i.test(p)) return DeformGroup.SideR;
     return null;
   };
-  const doorZFront = profile.cowlZ - 0.02;
-  const doorZRear = profile.rearAxleZ + 0.38;
   const classifyPoint = (x: number, y: number, z: number): DeformGroup => {
-    // Only slice front/rear geometry into BumperF/BumperR when the GLB lacks explicit bumper meshes
+    // Only slice unified body geometry when the GLB lacks dedicated factory meshes for that panel
     if (!hasExplicitFrontBumper) {
-      const frontBumperMaxY = Math.abs(x) < 0.38 ? 0.68 * yS : 0.56 * yS;
-      if (z > profile.halfL - 0.42 && y < frontBumperMaxY) return DeformGroup.BumperF;
+      const frontBumperMaxY = Math.abs(x) < 0.38 ? 0.66 * yS : 0.54 * yS;
+      if (z > profile.halfL - 0.40 && y < frontBumperMaxY) return DeformGroup.BumperF;
     }
     if (!hasExplicitRearBumper) {
-      if (z < -profile.halfL + 0.40 && y < 0.76 * yS) return DeformGroup.BumperR;
+      if (z < -profile.halfL + 0.34 && y < 0.54 * yS && Math.abs(x) < profile.planHalfW(z) * 0.94) return DeformGroup.BumperR;
     }
-    if (z > profile.cowlZ + 0.04 && z < profile.hoodFrontZ + 0.05 && y > profile.beltY(z) - 0.04 && Math.abs(x) < profile.planHalfW(z) * 0.82) return DeformGroup.Hood;
-    if (z < profile.deckZ - 0.04 && z > profile.trunkEndZ - 0.06 && y > profile.beltY(z) - 0.05 && Math.abs(x) < profile.planHalfW(z) * 0.82) return DeformGroup.Trunk;
+    if (!hasExplicitHood && z > profile.cowlZ + 0.04 && z < profile.hoodFrontZ + 0.05 && y > profile.beltY(z) - 0.04 && Math.abs(x) < profile.planHalfW(z) * 0.82) return DeformGroup.Hood;
+    if (!hasExplicitTrunk && z < profile.deckZ - 0.04 && z > profile.trunkEndZ - 0.06 && y > profile.beltY(z) - 0.05 && Math.abs(x) < profile.planHalfW(z) * 0.82) return DeformGroup.Trunk;
     const hw = profile.planHalfW(z);
     const belt = profile.beltY(z);
-    if (y < belt + 0.05 && Math.abs(x) > hw * 0.58) {
-      if (z <= doorZFront && z >= doorZRear) {
-        return x > 0 ? DeformGroup.DoorL : DeformGroup.DoorR;
-      }
+    if (y < belt + 0.04 && Math.abs(x) > hw * 0.62) {
       return x > 0 ? DeformGroup.SideL : DeformGroup.SideR;
     }
     return DeformGroup.Body;
@@ -2876,7 +3319,6 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
     if (c.z < profile.halfL - 0.72) return false;
     const m = Array.isArray(e.mat) ? e.mat[0] : e.mat;
     const matName = m?.name || '';
-    // Headlight lenses, DRLs, lamps, and inner housings sit in the upper-front pocket (y >= 0.55) behind the bumper tip
     if (/headlight|lamp|light|drl|lens|glass/i.test(e.path) || /headlight|lamp|light|drl|lens|glass/i.test(matName)) {
       if (e.box.min.y >= 0.45 * yS) return true;
     }
@@ -2898,12 +3340,20 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
       continue;
     }
     const byName = classifyPath(e.path);
+    const byFactory = factoryGroupByIdx.get(idx);
     const s = new Vector3(); e.box.getSize(s);
     const c = new Vector3(); e.box.getCenter(c);
     if (isFrontHeadlightEntry(e, c)) {
       rawParts.push(makePart(e.geo, e.mat, e.path || `headlight_${idx}`, DeformGroup.Body));
     } else if (byName !== null) {
       rawParts.push(makePart(e.geo, e.mat, e.path || `part_${idx}`, byName));
+    } else if (byFactory === 'DOOR_LR') {
+      // Welded seamlessly into SideL/SideR flanks (non-opening doors)
+      const split = splitGeometryByRegion(e.geo, (x) => (x >= 0 ? DeformGroup.SideL : DeformGroup.SideR));
+      for (const [grp, geo] of split) rawParts.push(makePart(geo, e.mat, `${e.path || 'side'}_${grp}`, grp));
+    } else if (byFactory !== undefined) {
+      const mapped = byFactory === DeformGroup.DoorL ? DeformGroup.SideL : byFactory === DeformGroup.DoorR ? DeformGroup.SideR : byFactory;
+      rawParts.push(makePart(e.geo, e.mat, e.path || `factory_${idx}`, mapped));
     } else if ((s.z > profile.length * 0.35 || s.x > profile.width * 0.65) && !/COCKPIT|WIPER|Windows|g_Wing_Guide/i.test(e.path)) {
       const split = splitGeometryByRegion(e.geo, classifyPoint);
       for (const [grp, geo] of split) rawParts.push(makePart(geo, e.mat, `${e.path || 'body'}_${grp}`, grp));
@@ -2927,7 +3377,6 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
   if (rawSpoilerParts.length > 0 && !spoilerBox.isEmpty()) {
     const sc = new Vector3();
     spoilerBox.getCenter(sc);
-    // Hinge pivot at the leading/lower center of the active wing assembly
     spoilerPivot = [sc.x, spoilerBox.min.y + (spoilerBox.max.y - spoilerBox.min.y) * 0.35, spoilerBox.max.z - (spoilerBox.max.z - spoilerBox.min.z) * 0.35];
     spoilerMeshes = consolidatePartsByGroupAndMaterial(rawSpoilerParts, 1)
       .filter((p) => p.mesh.geometry.getAttribute('position')?.count > 0)
@@ -2942,16 +3391,28 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
       });
   }
 
-  // Mount detailed lightweight 3D engine block (rigid core) & subdivided deformable front radiator:
-  // - Rear/mid-engine bay for McLaren P1 & mid-engine supercars
-  // - Front engine bay under the hood for BMW M4 CSL & standard front-engine vehicles
+  // Mount detailed lightweight 3D engine block (deformable/pushback mount) & subdivided deformable front radiator
   const isMidRearEngine = /mclaren|p1|ferrari|lamborghini|mid.?engine/i.test(name);
   const engineAssembly = buildDetailedEngineAssembly(profile, isMidRearEngine ? 'rear' : 'front', materials);
+  const engineMeshes: Mesh[] = [];
   for (const em of engineAssembly.rigid) {
-    rigidMeshes.push(em);
+    const g = em.geometry;
+    if (!g.getAttribute('normal')) g.computeVertexNormals();
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    em.visible = true;
+    em.frustumCulled = false;
+    engineMeshes.push(em);
   }
   for (const dp of engineAssembly.deformable) {
     parts.push(dp);
+  }
+
+  // Add detailed 3D cabin interior for Dodge Challenger SRT Demon (visible through its semi-transparent tinted windows!)
+  if (isDodgeDemon) {
+    for (const im of buildDodgeCabinInterior(profile)) {
+      rigidMeshes.push(im);
+    }
   }
 
   if (parts.length === 0 && rigidMeshes.length === 0) {
@@ -2981,6 +3442,7 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
     profile,
     parts,
     rigidMeshes,
+    engineMeshes,
     spoilerMeshes,
     spoilerPivot,
     wheels,
@@ -3123,6 +3585,81 @@ function splitGeometryByRegion(
     out.push([g, sub]);
   }
   return out;
+}
+
+/**
+ * Builds a clean, low-draw-call 3D cabin interior for the Dodge Challenger SRT Demon
+ * (dashboard, instrument hood, steering wheel & column, center console & shifter,
+ * two front sport bucket seats with headrests, and rear bench), strictly sized inside
+ * the cabin envelope so zero geometry ever clips outside the bodywork.
+ */
+function buildDodgeCabinInterior(P: CarProfile): Mesh[] {
+  const dashMat = new MeshStandardMaterial({ color: 0x16191f, roughness: 0.78, metalness: 0.08, envMapIntensity: 0.5 });
+  const seatMat = new MeshStandardMaterial({ color: 0x20242c, roughness: 0.72, metalness: 0.06, envMapIntensity: 0.55 });
+  const trimMat = new MeshStandardMaterial({ color: 0x991b24, roughness: 0.45, metalness: 0.35, envMapIntensity: 0.85 });
+
+  const floorY = P.floorY + 0.08;
+  const beltY = P.beltY(0);
+  const cabinW = Math.min(1.32, P.width * 0.68);
+  const dashZ = P.cowlZ - 0.14;
+  const frontSeatZ = P.cowlZ - 0.86;
+  const rearSeatZ = Math.max(P.deckZ + 0.24, frontSeatZ - 0.78);
+
+  const raw: CarPart[] = [];
+  const addBox = (
+    w: number, h: number, d: number,
+    x: number, y: number, z: number,
+    mat: Material,
+    rx = 0,
+  ) => {
+    const g = new BoxGeometry(w, h, d);
+    if (rx !== 0) g.rotateX(rx);
+    g.translate(x, y, z);
+    raw.push(makePart(g, mat, 'dodge_int', DeformGroup.Body));
+  };
+
+  // 1. Cabin floor tub + dashboard + instrument cluster hood
+  addBox(cabinW, 0.05, Math.max(1.2, dashZ - rearSeatZ + 0.35), 0, floorY, (dashZ + rearSeatZ) * 0.5, dashMat);
+  addBox(cabinW, 0.28, 0.34, 0, beltY - 0.12, dashZ, dashMat);
+  addBox(0.42, 0.12, 0.24, 0.34, beltY + 0.03, dashZ - 0.02, dashMat);
+  addBox(0.28, 0.15, 0.04, 0, beltY - 0.08, dashZ - 0.17, trimMat);
+
+  // 2. Center console + transmission tunnel + shifter
+  addBox(0.24, 0.24, Math.max(0.8, dashZ - rearSeatZ - 0.1), 0, floorY + 0.14, (dashZ + rearSeatZ) * 0.5, dashMat);
+  const shifterGeo = new CylinderGeometry(0.018, 0.022, 0.16, 8);
+  shifterGeo.translate(0, floorY + 0.32, dashZ - 0.42);
+  raw.push(makePart(shifterGeo, trimMat, 'dodge_shifter', DeformGroup.Body));
+
+  // 3. Steering column + steering wheel rim (driver side +X)
+  const colGeo = new CylinderGeometry(0.035, 0.042, 0.28, 10);
+  colGeo.rotateX(Math.PI / 2 - 0.32);
+  colGeo.translate(0.34, beltY - 0.04, dashZ - 0.22);
+  raw.push(makePart(colGeo, dashMat, 'dodge_steer_col', DeformGroup.Body));
+
+  const wheelGeo = new TorusGeometry(0.155, 0.02, 8, 20);
+  wheelGeo.rotateX(0.32);
+  wheelGeo.translate(0.34, beltY - 0.01, dashZ - 0.34);
+  raw.push(makePart(wheelGeo, dashMat, 'dodge_steer_wheel', DeformGroup.Body));
+  addBox(0.26, 0.032, 0.025, 0.34, beltY - 0.01, dashZ - 0.34, trimMat, 0.32);
+
+  // 4. Two front sport bucket seats (driver +X, passenger -X)
+  for (const sx of [0.34, -0.34]) {
+    addBox(0.46, 0.11, 0.46, sx, floorY + 0.15, frontSeatZ + 0.06, seatMat);
+    addBox(0.44, 0.54, 0.11, sx, floorY + 0.44, frontSeatZ - 0.16, seatMat, -0.22);
+    addBox(0.06, 0.48, 0.14, sx + 0.21, floorY + 0.42, frontSeatZ - 0.12, trimMat, -0.22);
+    addBox(0.06, 0.48, 0.14, sx - 0.21, floorY + 0.42, frontSeatZ - 0.12, trimMat, -0.22);
+    addBox(0.22, 0.18, 0.09, sx, floorY + 0.77, frontSeatZ - 0.23, seatMat, -0.14);
+  }
+
+  // 5. Rear bench seat
+  addBox(cabinW - 0.12, 0.12, 0.42, 0, floorY + 0.16, rearSeatZ + 0.08, seatMat);
+  addBox(cabinW - 0.14, 0.48, 0.12, 0, floorY + 0.42, rearSeatZ - 0.12, seatMat, -0.20);
+
+  return consolidatePartsByGroupAndMaterial(raw, 1).map((p) => {
+    p.mesh.castShadow = false;
+    p.mesh.receiveShadow = true;
+    return p.mesh;
+  });
 }
 
 

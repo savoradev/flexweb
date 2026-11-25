@@ -146,6 +146,13 @@ export class EngineCore {
   private reflectionQuality: 'off' | 'low' | 'high' = 'low';
   private menuDemoMode = false;
   private overheadMapMode = false;
+  private mapPanX = 0;
+  private mapPanZ = 0;
+  private mapZoomY = 2250;
+  private readonly activePointers = new Map<number, { x: number; y: number }>();
+  private lastPinchDist = 0;
+  private dynamicPRScale = 1.0;
+  private dynamicPRCooldown = 0;
   private studioCanvas: HTMLCanvasElement | null = null;
   private readonly projVec = new Vector3();
   private currentSettings: SimulatorSettings | null = null;
@@ -193,7 +200,7 @@ export class EngineCore {
 
     const w = Math.max(1, container.clientWidth);
     const h = Math.max(1, container.clientHeight);
-    this.camera = new PerspectiveCamera(54, w / h, 0.12, 420);
+    this.camera = new PerspectiveCamera(54, w / h, 0.14, 3200);
 
     this.renderer = new WebGLRenderer({
       antialias: !this.constrained,
@@ -218,7 +225,7 @@ export class EngineCore {
 
     // Scene, animated procedural cloud skybox & throttled real-time CubeCamera reflections (60 FPS)
     this.scene.background = SKY_COLOR;
-    this.scene.fog = new FogExp2(SKY_COLOR.getHex(), 0.0038);
+    this.scene.fog = new FogExp2(SKY_COLOR.getHex(), 0.00006);
 
     const skyMat = new ShaderMaterial({
       side: BackSide,
@@ -286,7 +293,7 @@ export class EngineCore {
         }
       `,
     });
-    this.skyDome = new Mesh(new SphereGeometry(360, 24, 16), skyMat);
+    this.skyDome = new Mesh(new SphereGeometry(4800, 24, 16), skyMat);
     this.skyDome.frustumCulled = false;
     this.scene.add(this.skyDome);
 
@@ -300,8 +307,8 @@ export class EngineCore {
       generateMipmaps: true,
       minFilter: LinearMipmapLinearFilter,
     });
-    // Far plane (450) must exceed skyDome radius (360) so clouds & sky are captured in real-time reflections
-    this.cubeCamera = new CubeCamera(0.45, 450, this.cubeRT);
+    // Far plane (5000) exceeds skyDome radius (4800) so clouds & sky are captured in real-time reflections
+    this.cubeCamera = new CubeCamera(0.45, 5000, this.cubeRT);
 
     const hemi = new HemisphereLight(0xeef4ff, 0x3b4046, 0.85);
     this.scene.add(hemi);
@@ -321,14 +328,18 @@ export class EngineCore {
     this.scene.add(this.dirLight);
     this.scene.add(this.dirLight.target);
 
-    // proving ground
+    // 2 km × 2 km Proving Ground
     this.arena = new CrashArena();
     this.scene.add(this.arena.buildVisuals(this.constrained));
 
-    // initial sculpted car
-    const src = createProceduralVehicleSource(BUILTIN_CARS[0].name, BUILTIN_CARS[0].paint);
+    // Internal boot placeholder hidden until first GLB car (BMW M4 CSL / Dodge Demon / McLaren P1) loads
+    const src = createProceduralVehicleSource('Loading Vehicle', 0x8e969d);
     this.vehicle = new SoftBodyVehicle(src, this.arena);
+    this.vehicle.solver.substeps = this.constrained ? 10 : 12;
+    this.vehicle.root.visible = false;
     this.scene.add(this.vehicle.root);
+    this.scene.add(this.vehicle.glass.mesh);
+    this.scene.add(this.vehicle.fluids.group);
     this.buildLatticeOverlay();
 
     // camera controls on canvas
@@ -366,6 +377,22 @@ export class EngineCore {
       this.userDragTimer = 2.0;
     }
 
+    // Smooth dynamic pixelRatio fallback ONLY if frame time exceeds 20 ms (recovers cleanly below 14 ms)
+    this.dynamicPRCooldown -= frameDt;
+    if (this.dynamicPRCooldown <= 0 && !this.menuDemoMode && (this.currentSettings?.resolutionMode ?? 'auto') === 'auto') {
+      const fms = this.loop.frameMs;
+      const baseMax = Math.min(window.devicePixelRatio || 1, this.constrained ? 1.25 : 1.5);
+      if (fms > 20.5 && this.dynamicPRScale > 0.72) {
+        this.dynamicPRScale = Math.max(0.72, this.dynamicPRScale - 0.08);
+        this.renderer.setPixelRatio(Math.max(0.8, baseMax * this.dynamicPRScale));
+        this.dynamicPRCooldown = 1.5;
+      } else if (fms < 14.0 && this.dynamicPRScale < 1.0) {
+        this.dynamicPRScale = Math.min(1.0, this.dynamicPRScale + 0.05);
+        this.renderer.setPixelRatio(Math.max(0.8, baseMax * this.dynamicPRScale));
+        this.dynamicPRCooldown = 2.0;
+      }
+    }
+
     // Throttled real-time CubeCamera -> PMREM reflections respecting Graphics -> Reflections setting
     const reflStride = this.reflectionQuality === 'high' ? 2 : this.constrained ? 8 : 5;
     if (this.reflectionQuality !== 'off' && this.reflFrameCounter++ % reflStride === 0) {
@@ -390,6 +417,8 @@ export class EngineCore {
     this.renderer.render(this.scene, this.camera);
 
     const liveTel = this.vehicle.updateTelemetry();
+    const FNow = this.vehicle.getFrame();
+    this.arena.updateRadarDisplay(FNow[0], FNow[2], liveTel.speedKmh);
     this.sound.update(liveTel, frameDt, this.loop.paused || this.menuDemoMode, this.loop.timeScale);
 
     this.statsTimer += frameDt;
@@ -412,10 +441,10 @@ export class EngineCore {
    * Photographs the front of the active vehicle inside the pure-white studio showroom
    * built underneath the map (`y = STUDIO_SHOWROOM_Y = -90`), returning a crisp 520×300 JPEG data URL.
    */
-  captureStudioPortrait(quality = 0.88): string {
+  captureStudioPortrait(quality = 0.80): string {
     try {
-      const W = 520;
-      const H = 300;
+      const W = 480;
+      const H = 270;
       if (!this.studioCanvas && typeof document !== 'undefined') {
         this.studioCanvas = document.createElement('canvas');
         this.studioCanvas.width = W;
@@ -433,6 +462,7 @@ export class EngineCore {
       const prevBg = this.scene.background;
       const prevEnv = this.scene.environment;
       const prevSkyVis = this.skyDome.visible;
+      const prevFluidsVis = this.vehicle.fluids.group.visible;
       const prevLatVis = this.latticeLines ? this.latticeLines.visible : false;
       const prevLightPos = this.dirLight.position.clone();
       const prevLightTarget = this.dirLight.target.position.clone();
@@ -453,6 +483,7 @@ export class EngineCore {
       this.scene.background = new Color(0xf8fafc);
       this.scene.environment = this.studioEnvRT.texture;
       this.skyDome.visible = false;
+      this.vehicle.fluids.group.visible = false;
       if (this.latticeLines) this.latticeLines.visible = false;
 
       this.dirLight.position.set(10, STUDIO_SHOWROOM_Y + 18, 16);
@@ -490,6 +521,7 @@ export class EngineCore {
       this.scene.background = prevBg;
       this.scene.environment = prevEnv;
       this.skyDome.visible = prevSkyVis;
+      this.vehicle.fluids.group.visible = prevFluidsVis;
       if (this.latticeLines) this.latticeLines.visible = prevLatVis;
       this.dirLight.position.copy(prevLightPos);
       this.dirLight.target.position.copy(prevLightTarget);
@@ -520,13 +552,33 @@ export class EngineCore {
     this.overheadMapMode = active;
     const fog = this.scene.fog as FogExp2 | null;
     if (active) {
-      this.camera.far = Math.max(this.camera.far, 750);
+      this.recenterMap();
+      this.camera.far = 6500;
       this.camera.updateProjectionMatrix();
-      if (fog) fog.density = 0.00055;
+      if (fog) fog.density = 0;
     } else {
-      this.camera.far = Math.max(180, this.currentSettings?.drawDistance ?? 300);
+      this.camera.far = Math.max(3500, this.currentSettings?.drawDistance ?? 3500);
       this.camera.updateProjectionMatrix();
-      if (fog) fog.density = 0.0038;
+      if (fog) fog.density = 0.00006;
+    }
+  }
+
+  /** Zooms the interactive overhead map camera in (factor < 1) or out (factor > 1). */
+  zoomMapBy(factor: number): void {
+    this.mapZoomY = Math.max(140, Math.min(3400, this.mapZoomY * factor));
+  }
+
+  /** Re-centers the interactive overhead map camera on the full 2 km × 2 km Proving Ground (or vehicle if requested). */
+  recenterMap(toVehicle = false): void {
+    if (toVehicle) {
+      const F = this.vehicle.getFrame();
+      this.mapPanX = Math.max(-1000, Math.min(1000, F[0]));
+      this.mapPanZ = Math.max(-1000, Math.min(1000, F[2]));
+      this.mapZoomY = 480;
+    } else {
+      this.mapPanX = 0;
+      this.mapPanZ = 0;
+      this.mapZoomY = 2250;
     }
   }
 
@@ -576,19 +628,20 @@ export class EngineCore {
       this.scene.environment = (this.envRT ?? this.studioEnvRT).texture;
     }
 
-    // 5. Graphics: Pixel Ratio / Resolution
+    // 5. Graphics: Pixel Ratio / Resolution (capped 1.25 mobile/tablet, 1.5 desktop in auto mode)
+    this.dynamicPRScale = 1.0;
     const dpr = window.devicePixelRatio || 1;
     const targetPR =
       s.resolutionMode === 'performance'
         ? Math.min(dpr, 1.0)
         : s.resolutionMode === 'quality'
           ? Math.min(dpr, 2.0)
-          : Math.min(dpr, this.constrained ? 1.2 : 1.5);
+          : Math.min(dpr, this.constrained ? 1.25 : 1.5);
     this.renderer.setPixelRatio(targetPR);
     this.onResize();
 
-    // 6. Graphics: Draw Distance & Skybox Clouds
-    this.camera.far = this.overheadMapMode ? Math.max(750, s.drawDistance) : Math.max(180, s.drawDistance);
+    // 6. Graphics: Full-Map Draw Distance & Skybox Clouds
+    this.camera.far = this.overheadMapMode ? 6500 : Math.max(3500, s.drawDistance);
     this.camera.updateProjectionMatrix();
     this.skyDome.visible = s.skyboxClouds;
   }
@@ -627,9 +680,9 @@ export class EngineCore {
   private updateCamera(dt: number): void {
     if (this.overheadMapMode) {
       this.camera.up.set(0, 1, 0);
-      const mapPos = Scratch.v0.set(-25, 235, -36);
-      const mapLook = Scratch.v1.set(-25, 0, -4);
-      const k = 1 - Math.exp(-4.8 * dt);
+      const mapPos = Scratch.v0.set(this.mapPanX, this.mapZoomY, this.mapPanZ - this.mapZoomY * 0.08);
+      const mapLook = Scratch.v1.set(this.mapPanX, 0, this.mapPanZ);
+      const k = 1 - Math.exp(-5.4 * dt);
       this.camPos.lerp(mapPos, k);
       this.camLook.lerp(mapLook, k);
       this.camera.position.copy(this.camPos);
@@ -822,12 +875,28 @@ export class EngineCore {
     if (carId === this.activeCarId) {
       const c = new Color(hex);
       const vSrc = (this.vehicle as unknown as {
-        src: { materials: { paint: { color: Color } }; paintMaterials?: { color: Color }[] };
+        src: { materials: { paint: { color: Color; needsUpdate?: boolean } }; paintMaterials?: { color: Color; needsUpdate?: boolean }[] };
       }).src;
       vSrc.materials.paint.color.copy(c);
+      vSrc.materials.paint.needsUpdate = true;
       if (vSrc.paintMaterials) {
-        for (const pm of vSrc.paintMaterials) pm.color.copy(c);
+        for (const pm of vSrc.paintMaterials) {
+          pm.color.copy(c);
+          pm.needsUpdate = true;
+        }
       }
+      this.vehicle.root.traverse((obj) => {
+        const mesh = obj as Mesh;
+        if (!mesh.isMesh) return;
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const m of mats) {
+          const sm = m as { name?: string; color?: Color; needsUpdate?: boolean } | null;
+          if (sm?.color && sm.name && /^(Car_?paint|Car_?Paint_?\.?\d*|CARS|carpaint_second)$/i.test(sm.name)) {
+            sm.color.copy(c);
+            sm.needsUpdate = true;
+          }
+        }
+      });
     }
     this.paintByCar[carId] = hex;
     writePersistedSettings({ paintByCar: { [carId]: hex } });
@@ -1056,7 +1125,7 @@ export class EngineCore {
     await yieldFrame();
     console.time('[FlexWeb Load] mesh merge');
     const savedPaint = this.paintByCar[carId];
-    const src = fitGLBToVehicleSource(sceneRoot, carName, savedPaint ?? paint);
+    const src = fitGLBToVehicleSource(sceneRoot, carName, savedPaint ?? paint, savedPaint);
     console.timeEnd('[FlexWeb Load] mesh merge');
     if (gen !== this.loadGeneration) {
       src.dispose();
@@ -1131,6 +1200,8 @@ export class EngineCore {
     // Atomic swap: dispose old vehicle only now that the new vehicle is 100% ready & bound
     this.vehicle.dispose();
     this.vehicle = nextVehicle;
+    this.vehicle.solver.substeps = this.constrained ? 10 : 12;
+    this.vehicle.root.visible = true;
     if (this.currentSettings) {
       this.vehicle.steeringSensitivity = this.currentSettings.steeringSensitivity;
       this.vehicle.absEnabled = this.currentSettings.absEnabled;
@@ -1146,6 +1217,8 @@ export class EngineCore {
     });
     if (this.bodyOpacity < 0.99) this.vehicle.setBodyOpacity(this.bodyOpacity);
     this.scene.add(this.vehicle.root);
+    this.scene.add(this.vehicle.glass.mesh);
+    this.scene.add(this.vehicle.fluids.group);
     this.buildLatticeOverlay();
     this.reset(0, 0, 0, 0);
 
@@ -1200,7 +1273,7 @@ export class EngineCore {
       workerParts.push({ group: parts[i].group, positions: posCopy, normals: nrmCopy, indices: idxCopy });
     }
 
-    const restLocalCopy = new Float64Array(vehicle.restLocal);
+    const restLocalCopy = new Float32Array(vehicle.restLocal);
     const restFramesCopy = new Float32Array(vehicle.deformer.getRestFrames());
     const groupNodesCopy = vehicle.deformer.getGroupNodes().map((g) => new Uint16Array(g));
     transferables.push(restLocalCopy.buffer, restFramesCopy.buffer);
@@ -1235,6 +1308,8 @@ export class EngineCore {
     // Dispose previous vehicle completely so only 1 car stays in WebGL/RAM
     this.vehicle.dispose();
     this.vehicle = new SoftBodyVehicle(src, this.arena);
+    this.vehicle.solver.substeps = this.constrained ? 10 : 12;
+    this.vehicle.root.visible = true;
     if (this.currentSettings) {
       this.vehicle.steeringSensitivity = this.currentSettings.steeringSensitivity;
       this.vehicle.absEnabled = this.currentSettings.absEnabled;
@@ -1243,6 +1318,8 @@ export class EngineCore {
     this.sound.setProfileFromCarName(this.vehicle.name);
     if (this.bodyOpacity < 0.99) this.vehicle.setBodyOpacity(this.bodyOpacity);
     this.scene.add(this.vehicle.root);
+    this.scene.add(this.vehicle.glass.mesh);
+    this.scene.add(this.vehicle.fluids.group);
     this.buildLatticeOverlay();
     this.reset(0, 0, 0, 0);
   }
@@ -1252,26 +1329,65 @@ export class EngineCore {
   private bindPointerEvents(el: HTMLElement): void {
     el.addEventListener('pointerdown', (e) => {
       this.sound.unlock();
+      this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.activePointers.size === 2) {
+        const pts = Array.from(this.activePointers.values());
+        this.lastPinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      }
       this.isPointerDown = true;
       this.lastPtrX = e.clientX;
       this.lastPtrY = e.clientY;
-      el.setPointerCapture(e.pointerId);
+      try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     });
     el.addEventListener('pointermove', (e) => {
+      if (!this.activePointers.has(e.pointerId)) return;
+      this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      // 2-finger pinch-to-zoom on touchscreens
+      if (this.activePointers.size === 2) {
+        const pts = Array.from(this.activePointers.values());
+        const distNow = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        if (this.lastPinchDist > 10 && distNow > 10) {
+          const ratio = this.lastPinchDist / distNow;
+          if (this.overheadMapMode) {
+            this.mapZoomY = Math.max(140, Math.min(3400, this.mapZoomY * ratio));
+          } else {
+            this.orbitDist = Math.max(3.2, Math.min(16, this.orbitDist * ratio));
+            this.userDragTimer = 3.0;
+          }
+        }
+        this.lastPinchDist = distNow;
+        return;
+      }
+
       if (!this.isPointerDown) return;
       const dx = e.clientX - this.lastPtrX;
       const dy = e.clientY - this.lastPtrY;
       this.lastPtrX = e.clientX;
       this.lastPtrY = e.clientY;
+      if (this.overheadMapMode) {
+        const panScale = this.mapZoomY * 0.0014;
+        this.mapPanX = Math.max(-1000, Math.min(1000, this.mapPanX + dx * panScale));
+        this.mapPanZ = Math.max(-1000, Math.min(1000, this.mapPanZ - dy * panScale));
+        return;
+      }
       this.orbitYaw -= dx * 0.007;
       this.orbitPitch = Math.max(0.05, Math.min(1.35, this.orbitPitch + dy * 0.006));
       this.userDragTimer = 3.0;
     });
-    const up = () => { this.isPointerDown = false; };
+    const up = (e: PointerEvent) => {
+      this.activePointers.delete(e.pointerId);
+      if (this.activePointers.size < 2) this.lastPinchDist = 0;
+      if (this.activePointers.size === 0) this.isPointerDown = false;
+    };
     el.addEventListener('pointerup', up);
     el.addEventListener('pointercancel', up);
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
+      if (this.overheadMapMode) {
+        this.mapZoomY = Math.max(140, Math.min(3400, this.mapZoomY + e.deltaY * 1.1));
+        return;
+      }
       this.orbitDist = Math.max(3.2, Math.min(16, this.orbitDist + e.deltaY * 0.004));
       this.userDragTimer = 3.0;
     }, { passive: false });

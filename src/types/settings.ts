@@ -20,7 +20,7 @@ export interface SimulatorSettings {
   shadowQuality: ShadowQuality;
   reflectionQuality: ReflectionQuality;
   resolutionMode: ResolutionMode;
-  drawDistance: number;   // 180 | 300 | 450
+  drawDistance: number;   // 2200 | 3500 | 5000
   skyboxClouds: boolean;
 }
 
@@ -38,7 +38,7 @@ export const DEFAULT_SETTINGS: SimulatorSettings = {
   shadowQuality: 'low',
   reflectionQuality: 'low',
   resolutionMode: 'auto',
-  drawDistance: 300,
+  drawDistance: 3500,
   skyboxClouds: true,
 };
 
@@ -49,7 +49,9 @@ export function loadSimulatorSettings(): SimulatorSettings {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw) as Partial<SimulatorSettings>;
-    return { ...DEFAULT_SETTINGS, ...parsed };
+    const merged = { ...DEFAULT_SETTINGS, ...parsed };
+    if (merged.drawDistance < 2200) merged.drawDistance = 3500;
+    return merged;
   } catch {
     return { ...DEFAULT_SETTINGS };
   }

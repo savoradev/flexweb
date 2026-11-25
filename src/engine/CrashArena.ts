@@ -143,30 +143,30 @@ export class CrashArena implements CollisionWorld {
   /** 16 numbered stations across all 5 zones on the 2 km × 2 km Overhead Map. */
   readonly mapZones: ArenaMapZone[] = [
     // Zone 1: High-Speed Crash-Test Lab (z = -240 -> +260)
-    { num: 1, id: 'wall', label: '1. Mur Frontal NCAP (Piste 500m)', markerX: 0, markerZ: 260, spawnX: 0, spawnZ: 80, teleportX: 0, teleportZ: -180, yaw: 0, defaultSpeedKmh: 120, category: 'crash' },
-    { num: 2, id: 'offset', label: '2. Barrière Déformable 40% Offset', markerX: -18, markerZ: 260, spawnX: -16.71, spawnZ: 140, teleportX: -16.71, teleportZ: 185, yaw: 0, defaultSpeedKmh: 95, category: 'crash' },
-    { num: 3, id: 'small-overlap', label: '3. Barrière 25% Small Overlap', markerX: -32, markerZ: 260, spawnX: -30.83, spawnZ: 140, teleportX: -30.83, teleportZ: 185, yaw: 0, defaultSpeedKmh: 95, category: 'crash' },
-    { num: 4, id: 'pole', label: '4. Poteau Acier Haute Résistance', markerX: 16, markerZ: 260, spawnX: 16, spawnZ: 150, teleportX: 16, teleportZ: 195, yaw: 0, defaultSpeedKmh: 85, category: 'crash' },
-    { num: 5, id: 'side', label: '5. Impact Latéral Poteau / Bollards', markerX: 46, markerZ: 260, spawnX: 46, spawnZ: 261.75, teleportX: 30, teleportZ: 205, yaw: Math.PI / 2, defaultSpeedKmh: 46, lateral: true, category: 'crash' },
-    { num: 6, id: 'angled', label: '6. Mur Acier Incliné 30°', markerX: 64, markerZ: 260, spawnX: 64, spawnZ: 155, teleportX: 64, teleportZ: 195, yaw: 0, defaultSpeedKmh: 90, category: 'crash' },
+    { num: 1, id: 'wall', label: '1. Full-Width NCAP Wall (500m Runway)', markerX: 0, markerZ: 260, spawnX: 0, spawnZ: 80, teleportX: 0, teleportZ: -180, yaw: 0, defaultSpeedKmh: 120, category: 'crash' },
+    { num: 2, id: 'offset', label: '2. 40% Offset Deformable Barrier', markerX: -18, markerZ: 260, spawnX: -16.71, spawnZ: 140, teleportX: -16.71, teleportZ: 185, yaw: 0, defaultSpeedKmh: 95, category: 'crash' },
+    { num: 3, id: 'small-overlap', label: '3. 25% Small Overlap Barrier', markerX: -32, markerZ: 260, spawnX: -30.83, spawnZ: 140, teleportX: -30.83, teleportZ: 185, yaw: 0, defaultSpeedKmh: 95, category: 'crash' },
+    { num: 4, id: 'pole', label: '4. High-Strength Steel Pole', markerX: 16, markerZ: 260, spawnX: 16, spawnZ: 150, teleportX: 16, teleportZ: 195, yaw: 0, defaultSpeedKmh: 85, category: 'crash' },
+    { num: 5, id: 'side', label: '5. Side Pole & Urban Bollards', markerX: 46, markerZ: 260, spawnX: 46, spawnZ: 261.75, teleportX: 30, teleportZ: 205, yaw: Math.PI / 2, defaultSpeedKmh: 46, lateral: true, category: 'crash' },
+    { num: 6, id: 'angled', label: '6. 30° Angled Steel Wall', markerX: 64, markerZ: 260, spawnX: 64, spawnZ: 155, teleportX: 64, teleportZ: 195, yaw: 0, defaultSpeedKmh: 90, category: 'crash' },
 
     // Zone 2: Hydraulic Press, Pendulum Hammers & Crusher Rollers (Northeast)
-    { num: 7, id: 'double-press', label: '7. Double Presse Hydraulique Lourde', markerX: 195, markerZ: 158, spawnX: 195, spawnZ: 112, teleportX: 195, teleportZ: 150, yaw: 0, defaultSpeedKmh: 55, category: 'crash' },
-    { num: 8, id: 'pendulums', label: '8. Marteaux Pendulaires Synchronisés', markerX: 245, markerZ: 154, spawnX: 245, spawnZ: 92, teleportX: 245, teleportZ: 105, yaw: 0, defaultSpeedKmh: 65, category: 'crash' },
-    { num: 9, id: 'rollers', label: '9. Rouleaux Broyeurs Progressifs', markerX: 295, markerZ: 150, spawnX: 295, spawnZ: 112, teleportX: 295, teleportZ: 126, yaw: 0, defaultSpeedKmh: 42, category: 'crash' },
+    { num: 7, id: 'double-press', label: '7. Heavy Double Hydraulic Press', markerX: 195, markerZ: 158, spawnX: 195, spawnZ: 112, teleportX: 195, teleportZ: 150, yaw: 0, defaultSpeedKmh: 55, category: 'crash' },
+    { num: 8, id: 'pendulums', label: '8. Synchronized Pendulum Hammers', markerX: 245, markerZ: 154, spawnX: 245, spawnZ: 92, teleportX: 245, teleportZ: 105, yaw: 0, defaultSpeedKmh: 65, category: 'crash' },
+    { num: 9, id: 'rollers', label: '9. Progressive Crusher Rollers', markerX: 295, markerZ: 150, spawnX: 295, spawnZ: 112, teleportX: 295, teleportZ: 126, yaw: 0, defaultSpeedKmh: 42, category: 'crash' },
 
     // Zone 3: Endurance & Suspension Circuit (West)
-    { num: 10, id: 'sine-whoops', label: '10. Ondulations & Barres Flexbody', markerX: -180, markerZ: -60, spawnX: -180, spawnZ: -235, teleportX: -180, teleportZ: -225, yaw: 0, defaultSpeedKmh: 55, category: 'suspension' },
-    { num: 11, id: 'cobbles-stairs', label: '11. Pavés Irréguliers & Escaliers Géants', markerX: -255, markerZ: -120, spawnX: -230, spawnZ: -235, teleportX: -280, teleportZ: -220, yaw: 0, defaultSpeedKmh: 48, category: 'suspension' },
-    { num: 12, id: 'banking-ditches', label: '12. Fossés Croisement & Virage Relevé 25°', markerX: -255, markerZ: 262, spawnX: -181, spawnZ: 170, teleportX: -330, teleportZ: -225, yaw: 0, defaultSpeedKmh: 135, category: 'suspension' },
+    { num: 10, id: 'sine-whoops', label: '10. Sinusoidal Waves & Chatter Bars', markerX: -180, markerZ: -60, spawnX: -180, spawnZ: -235, teleportX: -180, teleportZ: -225, yaw: 0, defaultSpeedKmh: 55, category: 'suspension' },
+    { num: 11, id: 'cobbles-stairs', label: '11. Cobblestones & Giant Staircase', markerX: -255, markerZ: -120, spawnX: -230, spawnZ: -235, teleportX: -280, teleportZ: -220, yaw: 0, defaultSpeedKmh: 48, category: 'suspension' },
+    { num: 12, id: 'banking-ditches', label: '12. Articulation Ditches & 25° Banked Turn', markerX: -255, markerZ: 262, spawnX: -181, spawnZ: 170, teleportX: -330, teleportZ: -225, yaw: 0, defaultSpeedKmh: 135, category: 'suspension' },
 
     // Zone 4: Mega-Ramps & Jump Canyon (South)
-    { num: 13, id: 'triple-ramps', label: '13. Tremplins 15° / 25° / 35° & Cible', markerX: -24, markerZ: -355, spawnX: -24, spawnZ: -265, teleportX: 68, teleportZ: -275, yaw: Math.PI, defaultSpeedKmh: 115, category: 'suspension' },
-    { num: 14, id: 'mega-canyon', label: '14. Méga-Tremplin & Saut du Canyon', markerX: 0, markerZ: -565, spawnX: 0, spawnZ: -410, teleportX: 0, teleportZ: -425, yaw: Math.PI, defaultSpeedKmh: 165, category: 'suspension' },
+    { num: 13, id: 'triple-ramps', label: '13. 15° / 25° / 35° Ramps & Bullseye', markerX: -24, markerZ: -355, spawnX: -24, spawnZ: -265, teleportX: 68, teleportZ: -275, yaw: Math.PI, defaultSpeedKmh: 115, category: 'suspension' },
+    { num: 14, id: 'mega-canyon', label: '14. Mega-Ramp & Canyon Jump', markerX: 0, markerZ: -565, spawnX: 0, spawnZ: -410, teleportX: 0, teleportZ: -425, yaw: Math.PI, defaultSpeedKmh: 165, category: 'suspension' },
 
     // Zone 5: Urban / Light Industrial District (Southeast)
-    { num: 15, id: 'roundabout', label: '15. Rond-Point Drift & Glissières', markerX: 380, markerZ: -220, spawnX: 255, spawnZ: -206, teleportX: 310, teleportZ: -206, yaw: Math.PI / 2, defaultSpeedKmh: 105, category: 'crash' },
-    { num: 16, id: 'industrial', label: '16. Hangars Traversables & Conteneurs', markerX: 390, markerZ: -380, spawnX: 260, spawnZ: -285, teleportX: 395, teleportZ: -310, yaw: Math.PI, defaultSpeedKmh: 125, category: 'crash' },
+    { num: 15, id: 'roundabout', label: '15. Drift Roundabout & Guardrails', markerX: 380, markerZ: -220, spawnX: 255, spawnZ: -206, teleportX: 310, teleportZ: -206, yaw: Math.PI / 2, defaultSpeedKmh: 105, category: 'crash' },
+    { num: 16, id: 'industrial', label: '16. Drive-Through Hangars & Containers', markerX: 390, markerZ: -380, spawnX: 260, spawnZ: -285, teleportX: 395, teleportZ: -310, yaw: Math.PI, defaultSpeedKmh: 125, category: 'crash' },
   ];
 
   private boxList: number[][] = [];

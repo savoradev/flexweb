@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { BUILTIN_CARS, CameraMode, CarOption, EngineCore, EngineStats } from './engine/EngineCore';
+import { CameraMode, CarOption, EngineCore, EngineStats } from './engine/EngineCore';
 import { isConstrainedDevice } from './engine/MemoryGuard';
 import {
   discoverPublicCars,
@@ -34,8 +34,6 @@ const GITHUB_CAR_OPTIONS: CarOption[] = GITHUB_CARS.map((g) => ({
   remoteUrls: g.remoteUrls,
   attribution: g.attribution,
 }));
-
-const GTS_PRESET: CarOption = BUILTIN_CARS[0];
 
 const CAMERA_MODES: { id: CameraMode; label: string }[] = [
   { id: 'chase', label: 'Chase' },
@@ -90,23 +88,48 @@ export function App(): React.ReactElement {
     ...discoverPublicCars()
       .filter((c) => !/(bmw_m4csl|dodge_challenger_srt_demon)\.glb$/i.test(c.url))
       .map((c) => ({ id: c.id, name: c.name, url: c.url, bytes: c.bytes })),
-    GTS_PRESET,
   ];
   const [carOptions, setCarOptions] = useState<CarOption[]>(initialCars);
-  const [chosenCarId, setChosenCarId] = useState<string>(
-    () => getLastSelectedCarId() || GITHUB_CAR_OPTIONS[0].id,
-  );
+  const [chosenCarId, setChosenCarId] = useState<string>(() => {
+    const saved = getLastSelectedCarId();
+    return saved && !saved.startsWith('builtin-') ? saved : GITHUB_CAR_OPTIONS[0].id;
+  });
   const [stats, setStats] = useState<EngineStats | null>(null);
   // Start with NO loading screen on Main Menu — only show after user selects/confirms a car
   const [loadingState, setLoadingState] = useState<LoadingState | null>(null);
   const [draggingFile, setDraggingFile] = useState(false);
 
+  const isTouchDevice =
+    typeof window !== 'undefined' &&
+    ('ontouchstart' in window || navigator.maxTouchPoints > 0 || isConstrainedDevice());
   const [diagCollapsed, setDiagCollapsed] = useState(false);
-  const [touchEnabled, setTouchEnabled] = useState(() =>
-    isConstrainedDevice() ||
-    (typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0)),
-  );
+  const [touchEnabled, setTouchEnabled] = useState(() => isTouchDevice);
   const [touchPressed, setTouchPressed] = useState({ left: false, right: false, throttle: false, brake: false, handbrake: false });
+
+  // Automatically request fullscreen + landscape orientation lock on first tap for touch devices
+  useEffect(() => {
+    if (!isTouchDevice) return;
+    let locked = false;
+    const onFirstTap = () => {
+      if (locked) return;
+      locked = true;
+      try {
+        const el = document.documentElement;
+        if (!document.fullscreenElement && el.requestFullscreen) {
+          void el.requestFullscreen().catch(() => {});
+        }
+        const orient = window.screen.orientation as unknown as { lock?: (mode: string) => Promise<void> } | undefined;
+        if (orient && typeof orient.lock === 'function') {
+          void orient.lock('landscape').catch(() => {});
+        }
+      } catch {
+        // Ignore browser restrictions
+      }
+      window.removeEventListener('pointerdown', onFirstTap);
+    };
+    window.addEventListener('pointerdown', onFirstTap, { passive: true });
+    return () => window.removeEventListener('pointerdown', onFirstTap);
+  }, [isTouchDevice]);
 
   const keyState = useRef({ up: false, down: false, left: false, right: false, space: false });
   const touchState = useRef({ left: false, right: false, throttle: false, brake: false, handbrake: false });
@@ -172,7 +195,7 @@ export function App(): React.ReactElement {
     }
     const seq = ++loadSeqRef.current;
     const cleanName = opt.name.replace(/\s*\((public\/|Saved)\)$/i, '');
-    setLoadingState({ title: cleanName, step: 'Chargement', pct: 10 });
+    setLoadingState({ title: cleanName, step: 'Loading', pct: 10 });
     try {
       await eng.selectCar(opt, (step, pct) => {
         if (seq === loadSeqRef.current) {
@@ -212,7 +235,7 @@ export function App(): React.ReactElement {
     }
   }, [screen, returnScreen]);
 
-  // Automatic background crash showcase cycling BMW M4 CSL, Dodge Demon & McLaren P1 on Main Menu
+  // Automatic background crash showcase cycling BMW M4 CSL, Dodge Demon & McLaren P1 across the updated 2 km Proving Ground
   useEffect(() => {
     if (screen !== 'menu' && screen !== 'maps') return;
     let cancelled = false;
@@ -223,7 +246,7 @@ export function App(): React.ReactElement {
       GITHUB_CAR_OPTIONS[2] ?? GITHUB_CAR_OPTIONS[0], // Dodge Challenger SRT Demon
       GITHUB_CAR_OPTIONS[1] ?? GITHUB_CAR_OPTIONS[0], // McLaren P1
     ].filter(Boolean);
-    const demoPresetIds = ['wall', 'angled', 'offset', 'pole', 'ramp'];
+    const demoZoneIds = ['wall', 'double-press', 'offset', 'pendulums', 'pole', 'rollers', 'mega-canyon', 'small-overlap'];
 
     const runCrashCycle = async () => {
       const eng = engineRef.current;
@@ -232,7 +255,7 @@ export function App(): React.ReactElement {
       const startLoadSeq = loadSeqRef.current;
       try {
         const car = demoCars[cycleIdx % demoCars.length];
-        const pid = demoPresetIds[cycleIdx % demoPresetIds.length];
+        const zid = demoZoneIds[cycleIdx % demoZoneIds.length];
         cycleIdx++;
 
         if (car && eng.activeCarId !== car.id) {
@@ -245,14 +268,19 @@ export function App(): React.ReactElement {
 
         // Capture pure-white underground studio front portrait if not yet cached
         if (car && !carThumbsRef.current[car.id]) {
-          const portrait = eng.captureStudioPortrait(0.88);
+          const portrait = eng.captureStudioPortrait(0.80);
           if (portrait) saveStudioThumb(car.id, portrait);
         }
 
-        const preset = eng.arena.presets.find((p) => p.id === pid) ?? eng.arena.presets[0];
-        if (preset) eng.launchPreset(preset);
+        const zone = eng.arena.mapZones.find((z) => z.id === zid);
+        if (zone) {
+          eng.reset(zone.spawnX, zone.spawnZ, zone.yaw, zone.defaultSpeedKmh, Boolean(zone.lateral));
+        } else {
+          const preset = eng.arena.presets[0];
+          if (preset) eng.launchPreset(preset);
+        }
 
-        // Capture arena thumbnail for the PLAY map card 1.65s after launch
+        // Capture arena thumbnail for the PLAY map card 2.0s after launch (post-impact with fluid leaks & steam)
         window.setTimeout(() => {
           if (cancelled || !engineRef.current) return;
           if (screenRef.current !== 'menu' && screenRef.current !== 'maps') return;
@@ -263,7 +291,7 @@ export function App(): React.ReactElement {
               return next.length > 4 ? next.slice(next.length - 4) : next;
             });
           }
-        }, 1650);
+        }, 2000);
       } catch {
         // Keep background showcase resilient
       } finally {
@@ -271,8 +299,8 @@ export function App(): React.ReactElement {
       }
     };
 
-    const startTimer = window.setTimeout(() => { void runCrashCycle(); }, 600);
-    const interval = window.setInterval(() => { void runCrashCycle(); }, 7600);
+    const startTimer = window.setTimeout(() => { void runCrashCycle(); }, 450);
+    const interval = window.setInterval(() => { void runCrashCycle(); }, 6800);
     return () => {
       cancelled = true;
       window.clearTimeout(startTimer);
@@ -291,14 +319,6 @@ export function App(): React.ReactElement {
     engine.applySettings(settings);
     engine.setMenuDemoMode(true);
     setStats(engine.collectStats());
-
-    // Capture pure-white studio portrait of procedural GT-S right at boot if not yet cached
-    window.setTimeout(() => {
-      if (engineRef.current === engine && engine.activeCarId === GTS_PRESET.id && !carThumbsRef.current[GTS_PRESET.id]) {
-        const gtsShot = engine.captureStudioPortrait(0.88);
-        if (gtsShot) saveStudioThumb(GTS_PRESET.id, gtsShot);
-      }
-    }, 120);
 
     let disposed = false;
     void (async () => {
@@ -325,13 +345,12 @@ export function App(): React.ReactElement {
       const allOptions: CarOption[] = [
         ...GITHUB_CAR_OPTIONS,
         ...discovered.map((c) => ({ id: c.id, name: c.name, url: c.url, bytes: c.bytes })),
-        GTS_PRESET,
         ...savedOptions,
       ];
       setCarOptions(allOptions);
 
       const lastId = getLastSelectedCarId();
-      if (lastId) {
+      if (lastId && !lastId.startsWith('builtin-')) {
         const restored = allOptions.find(
           (c) =>
             c.id === lastId ||
@@ -459,7 +478,7 @@ export function App(): React.ReactElement {
     const eng = engineRef.current;
     if (!eng) return;
     const seq = ++loadSeqRef.current;
-    setLoadingState({ title: file.name, step: 'Importation du modèle 3D…', pct: 12 });
+    setLoadingState({ title: file.name, step: 'Importing 3D model…', pct: 12 });
     try {
       const rawBuffer = await file.arrayBuffer();
       const isZip = /\.zip$/i.test(file.name);
@@ -508,7 +527,7 @@ export function App(): React.ReactElement {
     setCarOptions(remaining);
     const eng = engineRef.current;
     if (eng && eng.activeCarId === opt.id) {
-      await handleSelectCar(GITHUB_CAR_OPTIONS[0] ?? GTS_PRESET);
+      await handleSelectCar(GITHUB_CAR_OPTIONS[0]);
     }
   };
 
@@ -591,13 +610,13 @@ export function App(): React.ReactElement {
       />
 
       {draggingFile && (
-        <div className="drop-banner">Déposez un modèle .GLB / .GLTF / .ZIP pour l&apos;importer</div>
+        <div className="drop-banner">Drop a .GLB / .GLTF / .ZIP 3D vehicle file to import</div>
       )}
 
       {loadingState && (
         <div className="loading-overlay" role="status" aria-live="polite">
           <div className="loading-card loading-minimal">
-            <span className="loading-word">Chargement</span>
+            <span className="loading-word">Loading</span>
             <span className="loading-dots" aria-hidden="true">
               <span />
               <span />
@@ -630,16 +649,21 @@ export function App(): React.ReactElement {
           carThumbs={carThumbs}
           onSelectCar={handleSelectCar}
           onPickPaint={(car, hex) => {
-            const eng = engineRef.current;
-            if (!eng) return;
-            eng.setPaintColor(hex, car.id);
-            if (eng.activeCarId === car.id) {
-              const shot = eng.captureStudioPortrait(0.88);
+            void (async () => {
+              const eng = engineRef.current;
+              if (!eng) return;
+              eng.setPaintColor(hex, car.id);
+              if (eng.activeCarId !== car.id) {
+                await handleSelectCar(car);
+                if (!engineRef.current || engineRef.current.activeCarId !== car.id) return;
+                engineRef.current.setPaintColor(hex, car.id);
+              }
+              const shot = engineRef.current?.captureStudioPortrait(0.80);
               if (shot) saveStudioThumb(car.id, shot);
-            }
+            })();
           }}
           onDeleteSavedCar={(opt) => void handleDeleteSavedCar(opt)}
-          confirmLabel={returnScreen === 'paused' ? 'Reprendre avec ce véhicule' : 'Démarrer sur Crash Test Arena'}
+          confirmLabel={returnScreen === 'paused' ? 'Resume with This Vehicle' : 'Start on Crash Test Arena'}
           onConfirmPlay={(car) => { void launchArenaPlay(car); }}
           onClose={() => setScreen(returnScreen)}
         />
@@ -686,7 +710,7 @@ export function App(): React.ReactElement {
       {/* ---------------- 5. Ultra-Clean In-Game Minimalist HUD ---------------- */}
       {screen === 'playing' && (
         <>
-          {/* Top-left: single clean PAUSE (Échap) button + ultra-compact quick strip */}
+          {/* Top-left: single clean PAUSE (Esc) button + ultra-compact quick strip */}
           <div className="bng-ingame-topleft">
             <button
               id="pause-menu-btn"
@@ -696,7 +720,7 @@ export function App(): React.ReactElement {
             >
               <span>❚❚</span>
               <span>PAUSE</span>
-              <kbd>Échap</kbd>
+              <kbd>Esc</kbd>
             </button>
 
             {settings.showHud && (
@@ -746,7 +770,7 @@ export function App(): React.ReactElement {
                   className={`btn ${!settings.muted ? 'active' : ''}`}
                   onClick={() => updateSettings({ ...settings, muted: !settings.muted })}
                 >
-                  {settings.muted ? 'Son OFF' : 'Son ON'}
+                  {settings.muted ? 'Sound OFF' : 'Sound ON'}
                 </button>
               </div>
             )}

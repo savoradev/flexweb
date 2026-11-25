@@ -27,7 +27,8 @@
 
 html,
 body,
-#root {
+#root,
+canvas {
   width: 100%;
   height: 100%;
   overflow: hidden;
@@ -36,6 +37,17 @@ body,
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  overscroll-behavior: none;
+}
+
+.bng-map-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  flex-wrap: wrap;
 }
 
 .app-shell {
@@ -43,6 +55,8 @@ body,
   width: 100%;
   height: 100%;
   overflow: hidden;
+  touch-action: none;
+  overscroll-behavior: none;
 }
 
 .viewport-canvas {
@@ -51,6 +65,7 @@ body,
   width: 100%;
   height: 100%;
   cursor: grab;
+  touch-action: none;
 }
 
 .viewport-canvas:active {

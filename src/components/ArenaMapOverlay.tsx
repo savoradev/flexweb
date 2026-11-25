@@ -17,7 +17,7 @@ interface ArenaMapOverlayProps {
   onClose: () => void;
 }
 
-const SPEED_PRESETS_KMH = [40, 65, 100, 140, 190];
+const SPEED_PRESETS_KMH = [50, 90, 140, 200, 250];
 
 export function ArenaMapOverlay({
   engine,
@@ -29,7 +29,7 @@ export function ArenaMapOverlay({
   const zones = engine?.arena.mapZones ?? [];
   const [selectedNum, setSelectedNum] = useState<number>(zones[0]?.num ?? 1);
   const selectedZone = zones.find((z) => z.num === selectedNum) ?? zones[0] ?? null;
-  const [speedKmh, setSpeedKmh] = useState<number>(selectedZone?.defaultSpeedKmh ?? 65);
+  const [speedKmh, setSpeedKmh] = useState<number>(selectedZone?.defaultSpeedKmh ?? 120);
   const [pins, setPins] = useState<ProjectedPin[]>([]);
   const [carPin, setCarPin] = useState<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false });
 
@@ -63,16 +63,54 @@ export function ArenaMapOverlay({
     speedUnit === 'mph' ? `${Math.round(kmh * 0.621371)} mph` : `${Math.round(kmh)} km/h`;
 
   return (
-    <div className="bng-mapview-layer" role="dialog" aria-label="Carte interactive des tests">
-      {/* Top Bar */}
+    <div className="bng-mapview-layer" role="dialog" aria-label="Interactive Proving Ground Map">
+      {/* Top Bar with Zoom +/-, Re-center & Exit */}
       <div className="bng-mapview-topbar">
         <div className="bng-mapview-title">
-          <span className="bng-eyebrow">VUE AÉRIENNE · CRASH TEST ARENA</span>
-          <strong>Cliquez sur un numéro pour vous téléporter ou lancer un crash</strong>
+          <span className="bng-eyebrow">AERIAL MAP · 2 KM × 2 KM PROVING GROUND</span>
+          <strong>Drag to pan · Wheel or pinch to zoom · Click any station</strong>
         </div>
-        <button id="close-mapview-btn" type="button" className="btn btn-menu" onClick={onClose}>
-          ← Retour (Échap)
-        </button>
+        <div className="bng-map-zoom-controls">
+          <button
+            id="map-zoom-in-btn"
+            type="button"
+            className="btn btn-menu"
+            title="Zoom in"
+            onClick={() => engine?.zoomMapBy(0.75)}
+          >
+            +
+          </button>
+          <button
+            id="map-zoom-out-btn"
+            type="button"
+            className="btn btn-menu"
+            title="Zoom out"
+            onClick={() => engine?.zoomMapBy(1.33)}
+          >
+            −
+          </button>
+          <button
+            id="map-recenter-btn"
+            type="button"
+            className="btn btn-menu"
+            title="Re-center full map"
+            onClick={() => engine?.recenterMap(false)}
+          >
+            Re-center
+          </button>
+          <button
+            id="map-findcar-btn"
+            type="button"
+            className="btn btn-menu"
+            title="Center on vehicle"
+            onClick={() => engine?.recenterMap(true)}
+          >
+            My Car
+          </button>
+          <button id="close-mapview-btn" type="button" className="btn btn-menu" onClick={onClose}>
+            ← Back (Esc)
+          </button>
+        </div>
       </div>
 
       {/* Live 3D-Projected Numbered Pins on every Arena Test */}
@@ -81,9 +119,9 @@ export function ArenaMapOverlay({
           <div
             className="bng-map-car-dot"
             style={{ left: `${carPin.x}px`, top: `${carPin.y}px` }}
-            title="Position actuelle du véhicule"
+            title="Current vehicle position"
           >
-            VOUS
+            YOU
           </div>
         )}
         {pins.map((p) => {
@@ -98,7 +136,7 @@ export function ArenaMapOverlay({
               type="button"
               className={`bng-map-pin ${z.category === 'suspension' ? 'susp' : 'crash'} ${isSel ? 'selected' : ''}`}
               style={{ left: `${p.x}px`, top: `${p.y}px` }}
-              title={`${z.num}. ${z.label}`}
+              title={z.label}
               onClick={() => setSelectedNum(z.num)}
             >
               <span>{z.num}</span>
@@ -126,19 +164,19 @@ export function ArenaMapOverlay({
 
           <div className="bng-mapview-card">
             <div className="bng-mapview-info">
-              <span className="bng-zone-badge">TEST #{selectedZone.num}</span>
+              <span className="bng-zone-badge">STATION #{selectedZone.num}</span>
               <h3>{selectedZone.label}</h3>
             </div>
 
             <div className="bng-mapview-speed">
               <div className="bng-speed-head">
-                <span>Vitesse d&apos;impact / test :</span>
+                <span>Launch / Impact Speed:</span>
                 <strong>{fmtSpeed(speedKmh)}</strong>
               </div>
               <input
                 type="range"
                 min={20}
-                max={220}
+                max={260}
                 step={5}
                 value={speedKmh}
                 onChange={(e) => setSpeedKmh(Number(e.target.value))}
@@ -164,7 +202,7 @@ export function ArenaMapOverlay({
                 className="bng-pause-btn"
                 onClick={() => onTeleport(selectedZone)}
               >
-                Se téléporter ici (0 {speedUnit === 'mph' ? 'mph' : 'km/h'})
+                Teleport Here (0 {speedUnit === 'mph' ? 'mph' : 'km/h'})
               </button>
               <button
                 id="map-launch-crash-btn"
@@ -172,7 +210,7 @@ export function ArenaMapOverlay({
                 className="bng-cta-btn"
                 onClick={() => onLaunchCrash(selectedZone, speedKmh)}
               >
-                Crash / Lancer à {fmtSpeed(speedKmh)} →
+                Launch Crash at {fmtSpeed(speedKmh)} →
               </button>
             </div>
           </div>
