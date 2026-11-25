@@ -94,9 +94,9 @@ const PROFILES: Record<EngineSoundProfileId, EngineAcousticProfile> = {
     peakFreq: 98,
     peakQ: 1.9,
     peakGainDb: 9.5,
-    forcedMinHz: 1350,
-    forcedMaxHz: 5900,
-    forcedGain: 0.095,
+    forcedMinHz: 780,
+    forcedMaxHz: 3950,
+    forcedGain: 0.115,
     isSupercharger: true,
     hybridGain: 0.0,
     popsIntensity: 0.65,
@@ -148,9 +148,16 @@ export class SoundEngine {
   private exhaustPeak: BiquadFilterNode | null = null;
   private engineOutGain: GainNode | null = null;
 
-  // Forced induction (twin-turbo spool OR belt-driven supercharger whine) & hybrid whine
+  // Forced induction (twin-turbo spool OR multi-harmonic twin-screw supercharger whine) & hybrid whine
   private forcedOsc: OscillatorNode | null = null;
+  private forcedOsc2: OscillatorNode | null = null;
+  private forcedOsc3: OscillatorNode | null = null;
+  private forcedOsc2Gain: GainNode | null = null;
+  private forcedOsc3Gain: GainNode | null = null;
+  private forcedBp: BiquadFilterNode | null = null;
   private forcedGain: GainNode | null = null;
+  private scAirFilter: BiquadFilterNode | null = null;
+  private scAirGain: GainNode | null = null;
   private hybridOsc: OscillatorNode | null = null;
   private hybridGain: GainNode | null = null;
 
@@ -177,6 +184,7 @@ export class SoundEngine {
   private effectsVol = 0.85;
 
   // Continuous state (zero allocations)
+  private smoothedRpm = 850;
   private turboBoost = 0;
   private prevThrottle = 0;
   private prevShiftCount = 0;
@@ -192,10 +200,12 @@ export class SoundEngine {
 
   setEnabled(on: boolean): void {
     this.enabled = on;
-    this.applyVolumes();
     if (on && this.ctx && this.ctx.state === 'suspended') {
-      void this.ctx.resume();
+      this.masterGain?.gain.setValueAtTime(0.0001, this.ctx.currentTime);
+      void this.ctx.resume().then(() => this.applyVolumes());
+      return;
     }
+    this.applyVolumes();
   }
 
   setVolumes(master: number, engine: number, effects: number, muted: boolean): void {
@@ -310,21 +320,48 @@ export class SoundEngine {
       this.oscGains.push(g);
     }
 
-    // 2. Forced Induction (Twin-Turbo Spool OR Dodge Demon Supercharger Whine)
+    // 2. Forced Induction (Twin-Turbo Spool OR 3-Harmonic Twin-Screw Supercharger Whine)
     const forcedOsc = ctx.createOscillator();
     forcedOsc.type = 'sine';
     forcedOsc.frequency.value = this.profile.forcedMinHz;
+
+    const forcedOsc2 = ctx.createOscillator();
+    forcedOsc2.type = 'triangle';
+    forcedOsc2.frequency.value = this.profile.forcedMinHz * 2.004;
+    const forcedOsc2Gain = ctx.createGain();
+    forcedOsc2Gain.gain.value = 0.0;
+
+    const forcedOsc3 = ctx.createOscillator();
+    forcedOsc3.type = 'sawtooth';
+    forcedOsc3.frequency.value = this.profile.forcedMinHz * 3.008;
+    const forcedOsc3Gain = ctx.createGain();
+    forcedOsc3Gain.gain.value = 0.0;
+
     const forcedBp = ctx.createBiquadFilter();
     forcedBp.type = 'bandpass';
-    forcedBp.frequency.value = 3000;
-    forcedBp.Q.value = 1.6;
+    forcedBp.frequency.value = 2200;
+    forcedBp.Q.value = 2.6;
+
     const forcedGain = ctx.createGain();
     forcedGain.gain.value = 0.0;
+
     forcedOsc.connect(forcedBp);
+    forcedOsc2.connect(forcedOsc2Gain);
+    forcedOsc2Gain.connect(forcedBp);
+    forcedOsc3.connect(forcedOsc3Gain);
+    forcedOsc3Gain.connect(forcedBp);
     forcedBp.connect(forcedGain);
     forcedGain.connect(engineBus);
+
     forcedOsc.start();
+    forcedOsc2.start();
+    forcedOsc3.start();
     this.forcedOsc = forcedOsc;
+    this.forcedOsc2 = forcedOsc2;
+    this.forcedOsc3 = forcedOsc3;
+    this.forcedOsc2Gain = forcedOsc2Gain;
+    this.forcedOsc3Gain = forcedOsc3Gain;
+    this.forcedBp = forcedBp;
     this.forcedGain = forcedGain;
 
     // 3. Hybrid IPAS Electric Whine (McLaren P1)
@@ -339,7 +376,7 @@ export class SoundEngine {
     this.hybridOsc = hybridOsc;
     this.hybridGain = hybridGain;
 
-    // 4. Single persistent looping white noise buffer (2 seconds) for tires, BOV, pops & crash
+    // 4. Single persistent looping white noise buffer (2 seconds) for tires, BOV, pops, intake air-rush & crash
     const sampleRate = ctx.sampleRate;
     const bufLen = sampleRate * 2;
     const noiseBuf = ctx.createBuffer(1, bufLen, sampleRate);
@@ -352,6 +389,19 @@ export class SoundEngine {
     const noise = ctx.createBufferSource();
     noise.buffer = noiseBuf;
     noise.loop = true;
+
+    // 4-sc. Supercharger Air-Grabber Intake Suction Rush -> engineBus
+    const scAirFilter = ctx.createBiquadFilter();
+    scAirFilter.type = 'bandpass';
+    scAirFilter.frequency.value = 1800;
+    scAirFilter.Q.value = 4.2;
+    const scAirGain = ctx.createGain();
+    scAirGain.gain.value = 0.0;
+    noise.connect(scAirFilter);
+    scAirFilter.connect(scAirGain);
+    scAirGain.connect(engineBus);
+    this.scAirFilter = scAirFilter;
+    this.scAirGain = scAirGain;
 
     // 4a. Tire screech branch -> effectsBus
     const tireFilter = ctx.createBiquadFilter();
@@ -435,8 +485,10 @@ export class SoundEngine {
       this.oscGains[i].gain.setTargetAtTime(P.mix[i], t, 0.05);
     }
     if (this.forcedOsc) {
-      this.forcedOsc.type = P.isSupercharger ? 'triangle' : 'sine';
+      this.forcedOsc.type = P.isSupercharger ? 'sawtooth' : 'sine';
     }
+    this.forcedOsc2Gain?.gain.setTargetAtTime(P.isSupercharger ? 0.58 : 0.0, t, 0.04);
+    this.forcedOsc3Gain?.gain.setTargetAtTime(P.isSupercharger ? 0.24 : 0.0, t, 0.04);
     this.exhaustPeak?.frequency.setTargetAtTime(P.peakFreq, t, 0.05);
     this.exhaustPeak?.Q.setTargetAtTime(P.peakQ, t, 0.05);
     this.exhaustPeak?.gain.setTargetAtTime(P.peakGainDb, t, 0.05);
@@ -448,50 +500,72 @@ export class SoundEngine {
     if (!this.ctx || !this.unlocked || !this.enabled) return;
     const t = this.ctx.currentTime;
 
-    if (paused) {
+    if (paused || tel.mech?.engineStalled) {
       this.engineOutGain?.gain.setTargetAtTime(0.0, t, 0.04);
       this.forcedGain?.gain.setTargetAtTime(0.0, t, 0.04);
+      this.scAirGain?.gain.setTargetAtTime(0.0, t, 0.04);
       this.hybridGain?.gain.setTargetAtTime(0.0, t, 0.04);
-      this.tireGain?.gain.setTargetAtTime(0.0, t, 0.04);
+      if (paused) this.tireGain?.gain.setTargetAtTime(0.0, t, 0.04);
       return;
     }
 
     const P = this.profile;
-    const rpm = Math.max(750, Math.min(P.redlineRpm + 200, tel.rpm));
+    const clampedDt = Math.min(Math.max(dt, 0.004), 0.05);
+    const rawRpm = Math.max(750, Math.min(P.redlineRpm + 200, tel.rpm));
+    // Clamp RPM delta spikes during frame drops on mobile so pitch never stutters or crackles
+    const maxStep = Math.min(450, 4200 * clampedDt);
+    const rpmDiff = rawRpm - this.smoothedRpm;
+    this.smoothedRpm += Math.max(-maxStep, Math.min(maxStep, rpmDiff));
+    const rpm = this.smoothedRpm;
     const rpmNorm = Math.max(0, Math.min(1, (rpm - 800) / (P.redlineRpm - 800)));
     const throttle = tel.throttle;
     const pitchScale = Math.max(0.35, Math.min(1.0, timeScale));
     const crankHz = (rpm / 60) * pitchScale;
 
-    // 1. Update 4 combustion harmonic oscillators
+    // 1. Update 4 combustion harmonic oscillators with smooth 30ms time constant
     for (let i = 0; i < 4; i++) {
       const f = Math.max(22, crankHz * P.orders[i]);
-      this.oscs[i].frequency.setTargetAtTime(f, t, 0.018);
+      this.oscs[i].frequency.setTargetAtTime(f, t, 0.03);
     }
     const topHarmonic = P.mix[3] * (0.55 + rpmNorm * 0.95 + throttle * 0.35);
-    this.oscGains[3].gain.setTargetAtTime(topHarmonic, t, 0.025);
+    this.oscGains[3].gain.setTargetAtTime(topHarmonic, t, 0.03);
 
     // Exhaust lowpass filter opens smoothly with RPM & throttle load
     const lpCutoff = P.lpMin + (P.lpMax - P.lpMin) * Math.pow(rpmNorm, 0.9) * (0.52 + 0.48 * throttle);
-    this.exhaustLowpass?.frequency.setTargetAtTime(lpCutoff, t, 0.025);
+    this.exhaustLowpass?.frequency.setTargetAtTime(lpCutoff, t, 0.03);
     this.engineDriveGain?.gain.setTargetAtTime(P.driveGain * (0.76 + 0.52 * throttle + 0.22 * rpmNorm), t, 0.03);
     this.engineOutGain?.gain.setTargetAtTime(0.24 + 0.16 * throttle + 0.10 * rpmNorm, t, 0.03);
 
-    // 2. Forced Induction: belt-driven Supercharger whine (Dodge Demon) OR Twin-Turbo spool (BMW / McLaren)
+    // 2. Forced Induction: realistic 2.7L Twin-Screw Supercharger (Dodge Demon) OR Twin-Turbo spool (BMW / McLaren)
     if (this.forcedOsc && this.forcedGain) {
       if (P.isSupercharger) {
-        // Instant RPM-locked high-pitched supercharger scream on throttle!
-        const scHz = (P.forcedMinHz + (P.forcedMaxHz - P.forcedMinHz) * rpmNorm) * pitchScale;
-        const scAmp = P.forcedGain * (0.12 + 0.88 * throttle) * (0.28 + 0.72 * rpmNorm);
-        this.forcedOsc.frequency.setTargetAtTime(scHz, t, 0.015);
-        this.forcedGain.gain.setTargetAtTime(scAmp, t, 0.02);
+        const baseHz = (P.forcedMinHz + (P.forcedMaxHz - P.forcedMinHz) * Math.pow(rpmNorm, 1.06)) * pitchScale;
+        this.forcedOsc.frequency.setTargetAtTime(baseHz, t, 0.03);
+        this.forcedOsc2?.frequency.setTargetAtTime(baseHz * 2.004, t, 0.03);
+        this.forcedOsc3?.frequency.setTargetAtTime(baseHz * 3.009, t, 0.03);
+
+        const bpCenter = Math.min(5400, baseHz * (1.35 + throttle * 0.45));
+        this.forcedBp?.frequency.setTargetAtTime(bpCenter, t, 0.03);
+        this.forcedBp?.Q.setTargetAtTime(2.4 + throttle * 1.4, t, 0.03);
+
+        const load = 0.07 + 0.93 * Math.pow(throttle, 0.72);
+        const scAmp = P.forcedGain * load * (0.18 + 0.82 * Math.pow(rpmNorm, 0.85));
+        const tau = throttle > this.prevThrottle ? 0.03 : 0.065;
+        this.forcedGain.gain.setTargetAtTime(scAmp, t, tau);
+
+        const airHz = Math.min(6200, baseHz * 1.55);
+        this.scAirFilter?.frequency.setTargetAtTime(airHz, t, 0.03);
+        this.scAirGain?.gain.setTargetAtTime(0.055 * throttle * (0.25 + 0.75 * rpmNorm), t, 0.03);
       } else {
         const targetBoost = throttle * Math.max(0, Math.min(1, (rpm - 1800) / (P.redlineRpm - 2200)));
         const spoolRate = targetBoost > this.turboBoost ? 3.5 : 5.5;
-        this.turboBoost += (targetBoost - this.turboBoost) * Math.min(1, dt * spoolRate);
+        this.turboBoost += (targetBoost - this.turboBoost) * Math.min(1, clampedDt * spoolRate);
         const turboHz = (P.forcedMinHz + (P.forcedMaxHz - P.forcedMinHz) * this.turboBoost) * pitchScale;
-        this.forcedOsc.frequency.setTargetAtTime(turboHz, t, 0.025);
+        this.forcedOsc.frequency.setTargetAtTime(turboHz, t, 0.03);
+        this.forcedBp?.frequency.setTargetAtTime(Math.min(6800, turboHz), t, 0.03);
+        this.forcedBp?.Q.setTargetAtTime(1.6, t, 0.03);
         this.forcedGain.gain.setTargetAtTime(P.forcedGain * this.turboBoost * (0.4 + 0.6 * throttle), t, 0.03);
+        this.scAirGain?.gain.setTargetAtTime(0.0, t, 0.04);
       }
     }
 

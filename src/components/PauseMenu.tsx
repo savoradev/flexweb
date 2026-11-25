@@ -1,30 +1,22 @@
 import React from 'react';
 
 interface PauseMenuProps {
-  showLattice: boolean;
-  bodyOpacity: number;
   touchEnabled: boolean;
   onContinue: () => void;
   onOpenMap: () => void;
   onOpenCars: () => void;
   onOpenSettings: () => void;
   onMainMenu: () => void;
-  onToggleLattice: () => void;
-  onChangeOpacity: (v: number) => void;
   onToggleTouch: () => void;
 }
 
 export function PauseMenu({
-  showLattice,
-  bodyOpacity,
   touchEnabled,
   onContinue,
   onOpenMap,
   onOpenCars,
   onOpenSettings,
   onMainMenu,
-  onToggleLattice,
-  onChangeOpacity,
   onToggleTouch,
 }: PauseMenuProps): React.ReactElement {
   return (
@@ -57,24 +49,10 @@ export function PauseMenu({
           <div className="bng-pause-quick-tools">
             <button
               type="button"
-              className={`btn btn-menu ${showLattice ? 'active' : ''}`}
-              onClick={onToggleLattice}
-            >
-              X-Ray: {showLattice ? 'ON' : 'OFF'}
-            </button>
-            <button
-              type="button"
               className={`btn btn-menu ${touchEnabled ? 'active' : ''}`}
               onClick={onToggleTouch}
             >
-              Touch: {touchEnabled ? 'ON' : 'OFF'}
-            </button>
-            <button
-              type="button"
-              className={`btn btn-menu ${bodyOpacity < 0.5 ? 'active' : ''}`}
-              onClick={() => onChangeOpacity(bodyOpacity < 0.5 ? 1.0 : 0.35)}
-            >
-              {bodyOpacity < 0.5 ? 'Body 100%' : 'Ghost 35%'}
+              Touch Controls: {touchEnabled ? 'ON' : 'OFF'}
             </button>
           </div>
 

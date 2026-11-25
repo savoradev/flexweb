@@ -69,9 +69,9 @@ export interface ZoneParams {
 export const DEFAULT_ZONES: ZoneParams[] = [
   /* 0: Cabin          */ { spring: 5.2e6, damp: 9800, plasticThreshold: 0.019, hardening: 0.50, breakStrain: 0 },
   /* 1: Longeron       */ { spring: 3.5e6, damp: 8600, plasticThreshold: 0.015, hardening: 0.24, breakStrain: 0 },
-  /* 2: Crumple        */ { spring: 1.75e6, damp: 7600, plasticThreshold: 0.0085, hardening: 0.10, breakStrain: 0 },
-  /* 3: Fender         */ { spring: 5.0e5, damp: 2600, plasticThreshold: 0.0055, hardening: 0.08, breakStrain: 0 },
-  /* 4: Hood           */ { spring: 5.6e5, damp: 5000, plasticThreshold: 0.0068, hardening: 0.14, breakStrain: 0 },
+  /* 2: Crumple        */ { spring: 1.75e6, damp: 7800, plasticThreshold: 0.0075, hardening: 0.09, breakStrain: 0 },
+  /* 3: Fender         */ { spring: 4.8e5, damp: 2800, plasticThreshold: 0.0048, hardening: 0.07, breakStrain: 0 },
+  /* 4: Hood           */ { spring: 5.4e5, damp: 5200, plasticThreshold: 0.0058, hardening: 0.12, breakStrain: 0 },
   /* 5: Trunk          */ { spring: 1.45e6, damp: 6500, plasticThreshold: 0.020, hardening: 0.22, breakStrain: 0 },
   /* 6: Bumper         */ { spring: 1.65e6, damp: 10800, plasticThreshold: 0.030, hardening: 0.42, breakStrain: 0 },
   /* 7: Hinge          */ { spring: 1.9e6, damp: 2800, plasticThreshold: 0.048, hardening: 0.0, breakStrain: 0.42 },
@@ -501,8 +501,8 @@ export class SoftBodySolver {
         const sign = lamEl > 0 ? 1 : -1;
         const excess = (Math.abs(lamEl) - deformCap) * denomEl;
         const oldL = L;
-        // Accordion buckling in crumple zones absorbs extra compression without elastic springback
-        const buckleRelax = (z === Zone.Crumple && sign > 0) ? 0.80 : 0.70;
+        // Accordion buckling in crumple zones absorbs extra compression with high plastic retention (minimal rubber-band bounce)
+        const buckleRelax = (z === Zone.Crumple && sign > 0) ? 0.88 : 0.78;
         L -= sign * (excess + (deformCap * buckleRelax) * denomEl);
         if (L < minL) L = minL;
         else if (L > maxL) L = maxL;

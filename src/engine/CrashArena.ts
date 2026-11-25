@@ -61,6 +61,14 @@ interface DynamicCone {
   vTiltX: number; vTiltZ: number;
 }
 
+interface DynamicBarrel {
+  x0: number; z0: number;
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
+  tiltX: number; tiltZ: number;
+  vTiltX: number; vTiltZ: number;
+}
+
 interface PendulumHammer {
   boxIndex: number;
   pivotX: number;
@@ -192,13 +200,15 @@ export class CrashArena implements CollisionWorld {
   private readonly pendulums: PendulumHammer[] = [];
   private readonly dynBarriers: DynamicBarrier[] = [];
   private readonly dynCones: DynamicCone[] = [];
+  private readonly dynBarrels: DynamicBarrel[] = [];
 
-  // Batched dynamic InstancedMeshes (all animated obstacles in just 5 draw calls!)
+  // Batched dynamic InstancedMeshes (all animated obstacles in just 6 draw calls!)
   private dynJerseyMesh: InstancedMesh | null = null;
   private dynJerseyMap: number[] = [];
   private dynGuardrailMesh: InstancedMesh | null = null;
   private dynGuardrailMap: number[] = [];
   private dynConeMesh: InstancedMesh | null = null;
+  private dynBarrelMesh: InstancedMesh | null = null;
   private dynHazardMachineryMesh: InstancedMesh | null = null; // 2 press heads + 4 pendulum heads
   private dynSteelMachineryMesh: InstancedMesh | null = null;  // 4 press pistons + 4 pendulum arms + 3 crusher rollers
   private rollerSpin = 0;
@@ -499,6 +509,99 @@ export class CrashArena implements CollisionWorld {
     this.patches.push({ x0: 52, x1: 112, z0: -120, z1: -40, mu: 0.15, color: 0xcbd5e1, rough: 0.08, name: 'Ice' });
 
     // ================================================================
+    // EXTRA INTERACTIVE CRASH-TEST PROPS & MOVABLE BARRELS / CONES
+    // (All batched into merged static meshes or InstancedMesh for 60 FPS mobile)
+    // ================================================================
+    // 1. Central-Zone Jump Kickers (immediately reachable from spawn)
+    this.ramps.push({ x: 14, z: 32, yaw: 0, len: 9.0, w: 5.2, h: 1.75 });
+    this.ramps.push({ x: -14, z: 32, yaw: 0, len: 9.0, w: 5.2, h: 1.75 });
+    this.ramps.push({ x: 14, z: -48, yaw: Math.PI, len: 9.5, w: 5.2, h: 1.95 });
+    this.ramps.push({ x: -14, z: -48, yaw: Math.PI, len: 9.5, w: 5.2, h: 1.95 });
+
+    // 2. High-Speed Speed Bumps along side test lanes
+    for (let i = 0; i < 4; i++) {
+      const bz = -18 + i * 11;
+      this.bumps.push({ x0: -26, x1: -14, z0: bz, z1: bz + 1.1, h: 0.20, kind: 'sine', color: 0xf59e0b });
+      this.bumps.push({ x0: 14, x1: 26, z0: bz, z1: bz + 1.1, h: 0.20, kind: 'sine', color: 0xf59e0b });
+    }
+
+    // 3. Staggered Steel Crash Pillars (Side-Impact & Slalom Gauntlet)
+    const extraPillars: [number, number][] = [
+      [28, -22], [35, -10], [28, 2], [35, 14],
+      [-28, -22], [-35, -10], [-28, 2], [-35, 14],
+    ];
+    for (const [px, pz] of extraPillars) {
+      this.addCyl(px, pz, 0.30, 0, 2.8, 0.48);
+    }
+
+    // 4. Knockable Concrete Jersey Barriers & Highway Guardrails near central proving lanes
+    const extraJerseys: [number, number, number][] = [
+      [11, 58, 0.12], [11, 61.5, 0.12], [11, 65, 0.12],
+      [-11, 58, -0.12], [-11, 61.5, -0.12], [-11, 65, -0.12],
+      [20, 88, Math.PI / 2], [23.5, 88, Math.PI / 2],
+      [-20, 88, Math.PI / 2], [-23.5, 88, Math.PI / 2],
+    ];
+    for (const [jx, jz, jyaw] of extraJerseys) {
+      const boxIndex = this.boxList.length;
+      this.dynamicBoxIndices.add(boxIndex);
+      this.addBox(jx, 0.45, jz, 0.34, 0.45, 1.35, jyaw, 0.65);
+      this.dynBarriers.push({
+        boxIndex, x0: jx, z0: jz, yaw0: jyaw,
+        x: jx, z: jz, yaw: jyaw,
+        vx: 0, vz: 0, omega: 0, tilt: 0, vTilt: 0,
+        hx: 0.34, hy: 0.45, hz: 1.35, guardrail: false,
+      });
+    }
+
+    const extraGuardrails: [number, number, number][] = [
+      [18.5, 18, 0], [-18.5, 18, 0],
+      [18.5, -24, 0], [-18.5, -24, 0],
+    ];
+    for (const [gx, gz, gyaw] of extraGuardrails) {
+      const boxIndex = this.boxList.length;
+      this.dynamicBoxIndices.add(boxIndex);
+      this.addBox(gx, 0.46, gz, 0.22, 0.46, 6.2, gyaw, 0.50);
+      this.dynBarriers.push({
+        boxIndex, x0: gx, z0: gz, yaw0: gyaw,
+        x: gx, z: gz, yaw: gyaw,
+        vx: 0, vz: 0, omega: 0, tilt: 0, vTilt: 0,
+        hx: 0.22, hy: 0.46, hz: 6.2, guardrail: true,
+      });
+    }
+
+    // 5. Movable Physics Crash Barrels (48 smashable drums in pyramids & clusters)
+    const addBarrelCluster = (cx: number, cz: number, rows: number) => {
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c <= r; c++) {
+          const bx = cx + (c - r * 0.5) * 0.85;
+          const bz = cz + r * 0.80;
+          this.dynBarrels.push({
+            x0: bx, z0: bz, x: bx, y: 0, z: bz,
+            vx: 0, vy: 0, vz: 0, tiltX: 0, tiltZ: 0, vTiltX: 0, vTiltZ: 0,
+          });
+        }
+      }
+    };
+    addBarrelCluster(6.5, 22, 3);    // 6 barrels right of runway
+    addBarrelCluster(-6.5, 22, 3);   // 6 barrels left of runway
+    addBarrelCluster(14, 48, 3);     // 6 barrels landing zone of east kicker
+    addBarrelCluster(-14, 48, 3);    // 6 barrels landing zone of west kicker
+    addBarrelCluster(0, -32, 3);     // 6 barrels south of spawn
+    addBarrelCluster(380, -182, 3);  // 6 barrels drift roundabout north
+    addBarrelCluster(342, -220, 3);  // 6 barrels drift roundabout west
+    addBarrelCluster(395, -335, 3);  // 6 barrels industrial yard
+
+    // 6. Extra Slalom Traffic Cones along main proving corridor
+    for (let i = 0; i < 12; i++) {
+      const cz = -12 + i * 7.5;
+      const side = (i & 1) === 0 ? 7.2 : -7.2;
+      this.dynCones.push({
+        x0: side, z0: cz, x: side, y: 0, z: cz,
+        vx: 0, vy: 0, vz: 0, tiltX: 0, tiltZ: 0, vTiltX: 0, vTiltZ: 0,
+      });
+    }
+
+    // ================================================================
     // 2,000 m × 2,000 m PERIMETER BOUNDARY WALLS
     // ================================================================
     const L = this.asphaltHalf;
@@ -624,7 +727,13 @@ export class CrashArena implements CollisionWorld {
       c.vx = 0; c.vy = 0; c.vz = 0;
       c.tiltX = 0; c.tiltZ = 0; c.vTiltX = 0; c.vTiltZ = 0;
     }
-    this.syncDynamicVisuals(true, true);
+    for (let i = 0; i < this.dynBarrels.length; i++) {
+      const b = this.dynBarrels[i];
+      b.x = b.x0; b.y = 0; b.z = b.z0;
+      b.vx = 0; b.vy = 0; b.vz = 0;
+      b.tiltX = 0; b.tiltZ = 0; b.vTiltX = 0; b.vTiltZ = 0;
+    }
+    this.syncDynamicVisuals(true, true, true);
   }
 
   private syncBarrierBox(b: DynamicBarrier): void {
@@ -811,8 +920,49 @@ export class CrashArena implements CollisionWorld {
       }
     }
 
-    if (barriersDirty || conesDirty) {
-      this.syncDynamicVisuals(barriersDirty, conesDirty);
+    // 4. Movable Physics Crash Barrels (zero-GC rigid body scatter & tumble)
+    let barrelsDirty = false;
+    for (let i = 0; i < this.dynBarrels.length; i++) {
+      const b = this.dynBarrels[i];
+      const bdx = b.x - carX, bdz = b.z - carZ;
+      if (bdx * bdx + bdz * bdz < 22 * 22) {
+        for (let n = 0; n < nCount; n += 2) {
+          if (py[n] > 1.15) continue;
+          const dx = b.x - px[n], dz = b.z - pz[n];
+          const d2 = dx * dx + dz * dz;
+          if (d2 < 0.72 * 0.72 && d2 > 1e-4) {
+            const invD = 1 / Math.sqrt(d2);
+            const nx = dx * invD, nz = dz * invD;
+            const spd = Math.sqrt(vx[n] * vx[n] + vz[n] * vz[n]);
+            const kick = Math.max(2.6, Math.min(16.5, spd * 0.78));
+            b.vx = nx * kick + vx[n] * 0.30;
+            b.vz = nz * kick + vz[n] * 0.30;
+            b.vy = Math.max(b.vy, Math.min(5.2, kick * 0.30));
+            b.vTiltX += nz * kick * 1.15;
+            b.vTiltZ -= nx * kick * 1.15;
+            break;
+          }
+        }
+      }
+      if (b.y > 0 || Math.abs(b.vx) > 0.01 || Math.abs(b.vy) > 0.01 || Math.abs(b.vz) > 0.01 || Math.abs(b.vTiltX) > 0.01 || Math.abs(b.vTiltZ) > 0.01) {
+        b.vy -= 9.81 * dt;
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        b.z += b.vz * dt;
+        if (b.y < 0) {
+          b.y = 0;
+          b.vy = Math.abs(b.vy) > 0.65 ? -b.vy * 0.36 : 0;
+          const gDrag = Math.exp(-3.8 * dt);
+          b.vx *= gDrag; b.vz *= gDrag; b.vTiltX *= gDrag; b.vTiltZ *= gDrag;
+        }
+        b.tiltX = Math.max(-1.57, Math.min(1.57, b.tiltX + b.vTiltX * dt));
+        b.tiltZ = Math.max(-1.57, Math.min(1.57, b.tiltZ + b.vTiltZ * dt));
+        barrelsDirty = true;
+      }
+    }
+
+    if (barriersDirty || conesDirty || barrelsDirty) {
+      this.syncDynamicVisuals(barriersDirty, conesDirty, barrelsDirty);
     }
   }
 
@@ -886,7 +1036,7 @@ export class CrashArena implements CollisionWorld {
     }
   }
 
-  private syncDynamicVisuals(updateBarriers = true, updateCones = true): void {
+  private syncDynamicVisuals(updateBarriers = true, updateCones = true, updateBarrels = true): void {
     if (updateBarriers) {
       if (this.dynJerseyMesh) {
         for (let k = 0; k < this.dynJerseyMap.length; k++) {
@@ -924,6 +1074,20 @@ export class CrashArena implements CollisionWorld {
         this.dynConeMesh.setMatrixAt(i, this.tmpMat);
       }
       this.dynConeMesh.instanceMatrix.needsUpdate = true;
+    }
+    if (updateBarrels && this.dynBarrelMesh) {
+      this.tmpScale.set(1, 1, 1);
+      for (let i = 0; i < this.dynBarrels.length; i++) {
+        const b = this.dynBarrels[i];
+        const tiltMag = Math.min(1.57, Math.hypot(b.tiltX, b.tiltZ));
+        const cy = b.y + 0.46 * Math.cos(tiltMag) + 0.30 * Math.sin(tiltMag);
+        this.tmpPos.set(b.x, cy, b.z);
+        this.tmpEuler.set(b.tiltX, 0, b.tiltZ, 'XYZ');
+        this.tmpQuat.setFromEuler(this.tmpEuler);
+        this.tmpMat.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
+        this.dynBarrelMesh.setMatrixAt(i, this.tmpMat);
+      }
+      this.dynBarrelMesh.instanceMatrix.needsUpdate = true;
     }
   }
 
@@ -1109,11 +1273,10 @@ export class CrashArena implements CollisionWorld {
       new MeshStandardMaterial({
         map: asphaltPack.map,
         normalMap: asphaltPack.normalMap,
-        normalScale: new Vector2(0.45, 0.45),
-        roughnessMap: asphaltPack.roughnessMap,
-        roughness: 0.94,
-        metalness: 0.02,
-        envMapIntensity: 0.22,
+        normalScale: new Vector2(0.32, 0.32),
+        roughness: 0.98,
+        metalness: 0.0,
+        envMapIntensity: 0.03,
       }),
     );
     asphalt.rotation.x = -Math.PI / 2;
@@ -1652,7 +1815,21 @@ export class CrashArena implements CollisionWorld {
       this.dynConeMesh.castShadow = true;
       g.add(this.dynConeMesh);
     }
-    this.syncDynamicVisuals(true, true);
+
+    // 5. Dynamic Movable Crash Barrels (1 InstancedMesh draw call for all 48 drums)
+    if (this.dynBarrels.length > 0) {
+      const barrelTex = new CanvasTexture(makeBarrelStripeCanvas());
+      barrelTex.colorSpace = SRGBColorSpace;
+      this.dynBarrelMesh = new InstancedMesh(
+        new CylinderGeometry(0.30, 0.30, 0.92, 14),
+        new MeshStandardMaterial({ map: barrelTex, roughness: 0.42, metalness: 0.35 }),
+        this.dynBarrels.length,
+      );
+      this.dynBarrelMesh.frustumCulled = false;
+      this.dynBarrelMesh.castShadow = true;
+      g.add(this.dynBarrelMesh);
+    }
+    this.syncDynamicVisuals(true, true, true);
 
     // ---- Underground Pure-White Studio Showroom (y = -90) ----
     const studioWallMat = new MeshBasicMaterial({ color: 0xf8fafc, side: BackSide, toneMapped: false });
@@ -1844,6 +2021,21 @@ function makeConeStripeCanvas(): HTMLCanvasElement {
   ctx.fillStyle = '#f8fafc';
   ctx.fillRect(0, 20, 64, 10);
   ctx.fillRect(0, 38, 64, 8);
+  return c;
+}
+
+function makeBarrelStripeCanvas(): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#dc2626';
+  ctx.fillRect(0, 0, 64, 64);
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 14, 64, 10);
+  ctx.fillRect(0, 40, 64, 10);
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(0, 0, 64, 5);
+  ctx.fillRect(0, 59, 64, 5);
   return c;
 }
 

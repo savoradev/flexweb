@@ -14,7 +14,7 @@ import {
   SoftBodySolver, SolverBuildBeam, SolverBuildColtri, SolverBuildNode, SubstepForceProvider, Zone,
 } from './SoftBodySolver';
 import { GlassShatterSystem } from './GlassShatterSystem';
-import { FluidLeakSystem } from './FluidLeakSystem';
+import { FluidEmitFrame, FluidLeakSystem } from './FluidLeakSystem';
 
 const GEAR_RATIOS = [3.55, 2.42, 1.78, 1.36, 1.08, 0.88, 0.72] as const;
 
@@ -81,21 +81,29 @@ export interface PartState {
   state: 'attached' | 'unlatched' | 'detached';
 }
 
+export type TransmissionMode = 'auto' | 'semi' | 'manual';
+
 export interface VehicleMechanicalState {
   engineHealth: number;
   engineStalled: boolean;
   frontAxleDamage: number;
   rearAxleDamage: number;
+  axleDamage: [number, number, number, number];
   steeringDamage: number;
   steeringLocked: boolean;
   steeringBiasDeg: number;
   oilLeak: boolean;
   coolantLeak: boolean;
+  fuelLeak: boolean;
+  coolantSeverity: number;
+  oilSeverity: number;
+  fuelSeverity: number;
 }
 
 export interface VehicleTelemetry {
   speedKmh: number;
   gear: string;
+  transmissionMode: TransmissionMode;
   rpm: number;
   throttle: number;
   brake: number;
@@ -203,7 +211,26 @@ export class SoftBodyVehicle implements SubstepForceProvider {
   private steeringLockAngle = 0;
   private oilLeak = false;
   private coolantLeak = false;
+  private fuelLeak = false;
+  private coolantSeverity = 0;
+  private oilSeverity = 0;
+  private fuelSeverity = 0;
+  private readonly radiatorNode: number;
+  private readonly oilPanNodeA: number;
+  private readonly oilPanNodeB: number;
+  private readonly fuelTankNode: number;
+  private readonly fluidEmit: FluidEmitFrame = {
+    radX: 0, radY: 0, radZ: 0,
+    oilX: 0, oilY: 0, oilZ: 0,
+    fuelX: 0, fuelY: 0, fuelZ: 0,
+    carVx: 0, carVy: 0, carVz: 0,
+    coolantSeverity: 0,
+    oilSeverity: 0,
+    fuelSeverity: 0,
+    engineDamage: 0,
+  };
   private misfirePhase = 0;
+  private impactFxCooldown = 0;
   private steerAngle = 0;
   private gear: 1 | -1 = 1;
   private autoGear = 1;
@@ -236,6 +263,44 @@ export class SoftBodyVehicle implements SubstepForceProvider {
   steeringSensitivity = 1.0;
   absEnabled = true;
   tcsEnabled = true;
+  transmissionMode: TransmissionMode = 'auto';
+  /** Current gear in semi/manual mode: -1 = R, 0 = N, 1..7 = forward gears. */
+  manualGear = 1;
+
+  /** Shift up one gear in Semi or Manual transmission mode (R -> N -> 1..7). */
+  shiftUp(): void {
+    if (this.transmissionMode === 'auto') return;
+    if (this.manualGear < 7) {
+      this.manualGear++;
+      this.shiftCount++;
+      this.shiftTimer = 0.11;
+      if (this.manualGear > 0) {
+        this.gear = 1;
+        this.autoGear = this.manualGear;
+      } else if (this.manualGear === -1) {
+        this.gear = -1;
+      }
+    }
+  }
+
+  /** Shift down one gear in Semi or Manual transmission mode (7..1 -> N -> R). */
+  shiftDown(): void {
+    if (this.transmissionMode === 'auto') return;
+    if (this.manualGear > -1) {
+      // Prevent shifting directly into Reverse while rolling forward > 12 km/h
+      if (this.manualGear === 0 && this.speed > 3.5) return;
+      this.manualGear--;
+      this.shiftCount++;
+      this.shiftTimer = 0.09;
+      if (this.manualGear > 0) {
+        this.gear = 1;
+        this.autoGear = this.manualGear;
+        this.engineRpm = Math.min(7200, this.engineRpm + 950);
+      } else if (this.manualGear === -1) {
+        this.gear = -1;
+      }
+    }
+  }
 
   constructor(src: VehicleVisualSource, world: CollisionWorld, precomputedBindings?: PrecomputedBindingData[] | 'defer') {
     this.src = src;
@@ -344,6 +409,10 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         addNode(-engHW, engY0, engZ1, 24, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
         addNode(0, engY1, engZ1, 22, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
       ];
+      this.radiatorNode = stations[0][1];
+      this.oilPanNodeA = engNodes[0];
+      this.oilPanNodeB = engNodes[4];
+      this.fuelTankNode = stations[S - 2][1];
       // Ultra-rigid cross-bracing across all 15 pairs of the engine block
       for (let i = 0; i < engNodes.length; i++) {
         for (let j = i + 1; j < engNodes.length; j++) {
@@ -997,7 +1066,7 @@ export class SoftBodyVehicle implements SubstepForceProvider {
 
     this.baseline.track(this.solver.rest);
     this.telemetry = {
-      speedKmh: 0, gear: 'N', rpm: 850, throttle: 0, brake: 0, steer: 0, absActive: false, maxTireSlip: 0, shiftCount: 0, gForce: 0, peakGForce: 0,
+      speedKmh: 0, gear: 'N', transmissionMode: 'auto', rpm: 850, throttle: 0, brake: 0, steer: 0, absActive: false, maxTireSlip: 0, shiftCount: 0, gForce: 0, peakGForce: 0,
       impactKmh: 0, peakImpactKmh: 0, absorbedKJ: 0, brokenBeams: 0,
       suspCompression: [0, 0, 0, 0],
       damage: { front: 0, cabin: 0, rear: 0, hood: 0, bumpers: 0, fenders: 0, engine: 0 },
@@ -1006,11 +1075,16 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         engineStalled: false,
         frontAxleDamage: 0,
         rearAxleDamage: 0,
+        axleDamage: [0, 0, 0, 0],
         steeringDamage: 0,
         steeringLocked: false,
         steeringBiasDeg: 0,
         oilLeak: false,
         coolantLeak: false,
+        fuelLeak: false,
+        coolantSeverity: 0,
+        oilSeverity: 0,
+        fuelSeverity: 0,
       },
       midRearEngine: isMidRear,
       parts: this.parts.map((p) => ({ label: p.label, state: p.state })),
@@ -1080,6 +1154,10 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.steeringLockAngle = 0;
     this.oilLeak = false;
     this.coolantLeak = false;
+    this.fuelLeak = false;
+    this.coolantSeverity = 0;
+    this.oilSeverity = 0;
+    this.fuelSeverity = 0;
     this.misfirePhase = 0;
     this.engineMount.position.set(0, 0, 0);
     this.engineMount.rotation.set(0, 0, 0);
@@ -1096,6 +1174,7 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.steerAngle = 0;
     this.gear = 1;
     this.autoGear = 1;
+    this.manualGear = 1;
     this.engineRpm = 850;
     this.speed = speed;
     this.prevSpeed = speed;
@@ -1169,15 +1248,35 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     }
     let throttle = inp.throttle, brake = inp.brake;
     if (this.autopilotSpeed > 0) {
-      if (S.lastImpact > 2 || inp.brake > 0 || inp.throttle > 0) this.autopilotSpeed = 0;
+      if (S.lastImpact > 2 || inp.brake > 0 || inp.throttle > 0 || this.engineStalled) this.autopilotSpeed = 0;
       else { const err = this.autopilotSpeed - vForward; throttle = Math.max(0, Math.min(1, err * 0.8)); brake = err < -1 ? 0.3 : 0; }
     }
-    if (this.gear === 1 && brake > 0.1 && vForward < 0.6 && throttle < 0.05) this.gear = -1;
-    else if (this.gear === -1 && throttle > 0.1 && vForward > -0.6) this.gear = 1;
+
     let drive = 0, brakeIn = 0;
-    if (this.gear === 1) { drive = throttle; brakeIn = brake; }
-    else { drive = -brake; brakeIn = throttle; }
-    const autoHold = !this.lateralSledActive && Math.abs(drive) < 0.02 && Math.abs(vForward) < 0.35 && this.autopilotSpeed === 0;
+    if (this.engineStalled) {
+      // Stalled engine: ZERO forward or reverse propulsion, brakes ALWAYS work at 100%!
+      drive = 0;
+      brakeIn = Math.max(brake, inp.handbrake);
+    } else if (this.transmissionMode === 'auto') {
+      if (this.gear === 1 && brake > 0.1 && vForward < 0.6 && throttle < 0.05) this.gear = -1;
+      else if (this.gear === -1 && throttle > 0.1 && vForward > -0.6) this.gear = 1;
+      if (this.gear === 1) { drive = throttle; brakeIn = brake; }
+      else { drive = -brake; brakeIn = throttle; }
+    } else {
+      // Semi-Automatic & Full Manual: throttle drives in selected gear (R / N / 1..7), brake ALWAYS brakes!
+      brakeIn = brake;
+      if (this.manualGear === 0) {
+        drive = 0; // Neutral: free rev, zero drive
+      } else if (this.manualGear === -1) {
+        this.gear = -1;
+        drive = -throttle;
+      } else {
+        this.gear = 1;
+        this.autoGear = this.manualGear;
+        drive = throttle;
+      }
+    }
+    const autoHold = !this.lateralSledActive && Math.abs(drive) < 0.02 && Math.abs(vForward) < 0.85 && this.autopilotSpeed === 0;
 
     const vSteer = Math.abs(vForward);
     // Progressive speed-sensitive steering curve + steering rack damage / lock after major front impacts
@@ -1332,17 +1431,23 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       const vLat = avx * lx + avy * ly + avz * lz;
       // Bent suspension camber reduces effective tyre contact patch grip realistically
       const camberPenalty = 1 - Math.min(0.32, Math.abs(W.bentCamber) * 0.75);
-      const mu = this.tireMu * gs.mu * camberPenalty;
+      const hbActive = inp.handbrake > 0 && Math.abs(vForward) > 2.5;
+      // Front tyres keep slightly stronger bite during handbrake/drift so the nose stays planted for counter-steering
+      const driftFrontBoost = (W.front && hbActive) ? 1.10 : 1.0;
+      const mu = this.tireMu * gs.mu * camberPenalty * driftFrontBoost;
       const Fmax = mu * Fs;
 
-      // Progressive Pacejka lateral slip curve
+      // Progressive Pacejka lateral slip curve (wider controllable drift sweet spot on rear tyres)
       const slip = Math.atan2(vLat, Math.max(Math.abs(vLong), 2.2));
       W.slip = slip;
-      let Fy = -Fmax * Math.sin(1.42 * Math.atan(7.8 * slip));
-      if (Math.abs(this.steerAngle) < 0.015 && !this.lateralSledActive && inp.handbrake === 0 && Math.abs(W.bentToe) < 0.02) {
+      const pacejkaShape = !W.front && Math.abs(slip) > 0.28 ? 1.24 : 1.42;
+      let Fy = -Fmax * Math.sin(pacejkaShape * Math.atan(7.8 * slip));
+      const latCancel = massShare * Math.abs(vLat) / h * 0.5;
+      if (autoHold && gs.ny > 0.90) {
+        Fy = -Math.sign(vLat) * Math.min(Fmax * 0.95, latCancel);
+      } else if (Math.abs(this.steerAngle) < 0.015 && !this.lateralSledActive && inp.handbrake === 0 && Math.abs(W.bentToe) < 0.02) {
         Fy -= vLat * Math.min(massShare * 3.2, Fmax * 0.18);
       }
-      const latCancel = massShare * Math.abs(vLat) / h * 0.5;
       if (Math.abs(Fy) > latCancel) Fy = Math.sign(Fy) * latCancel;
       if (this.lateralSledActive) Fy *= 0.03;
 
@@ -1352,8 +1457,13 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         // Damaged or broken half-shaft/axle cuts drive torque on this wheel
         const halfShaftFactor = axDmg > 0.78 ? 0 : Math.max(0.15, 1 - axDmg * 0.88);
         let df = driveForce * 0.5 * halfShaftFactor;
-        if (this.tcsEnabled && Math.abs(slip) > 0.22 && Math.abs(df) > Fmax * 0.65) {
-          df *= 0.62;
+        // Allow smooth RWD power-oversteer drift when steering hard + throttle (unless TCS is strictly clamping straight-line spin)
+        if (this.tcsEnabled && !hbActive && Math.abs(this.steerAngle) < 0.14 && Math.abs(slip) > 0.24 && Math.abs(df) > Fmax * 0.68) {
+          df *= 0.68;
+        }
+        // During RWD power-slide, slightly soften rear lateral grip so throttle smoothly sustains the drift angle
+        if (!W.front && !hbActive && drive > 0.45 && Math.abs(slip) > 0.20) {
+          Fy *= 0.76;
         }
         Fx += df;
       }
@@ -1368,8 +1478,15 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       const longCancel = massShare * Math.abs(vLong) / h * 0.5;
       if (brk > 0) Fx -= Math.sign(vLong) * Math.min(brk, longCancel);
       if (!W.front && inp.handbrake > 0) {
-        Fx = -Math.sign(vLong) * Math.min(Fmax * 0.82, longCancel);
-        Fy *= 0.42;
+        // Crisp drift handbrake: locks rear wheels, drops rear lateral traction to 22%, and initiates clean yaw swing
+        const hbBrk = Math.abs(this.steerAngle) > 0.08 ? Fmax * 0.54 : Fmax * 0.84;
+        Fx = -Math.sign(vLong) * Math.min(hbBrk, longCancel);
+        Fy *= Math.abs(vForward) > 5.0 ? 0.22 : 0.38;
+        if (Math.abs(this.steerAngle) > 0.06 && Math.abs(vForward) > 5.5) {
+          // Natural handbrake drift initiation kick opposite to turn center (rear kicks out cleanly)
+          const kick = -Math.sign(this.steerAngle) * Math.min(1, Math.abs(this.steerAngle) * 2.4) * Math.min(1, Math.abs(vForward) / 14) * Fmax * 0.34;
+          Fy += kick;
+        }
       }
       // rolling resistance (dramatically higher if wheel spindle/axle is bent or crushed)
       Fx -= vLong * (11 + Math.abs(W.bentCamber) * 65 + axDmg * 140);
@@ -1688,7 +1805,7 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     const gIdx = Math.max(0, Math.min(6, this.autoGear - 1));
     const wheelRpm = (kmh / 3.6) / Math.max(0.25, this.profile.wheelRadius) * (60 / (2 * Math.PI));
     const coupledRpm = 850 + wheelRpm * GEAR_RATIOS[gIdx] * rpmScale;
-    if (this.gear === 1 && this.shiftTimer <= 0) {
+    if (this.transmissionMode === 'auto' && this.gear === 1 && this.shiftTimer <= 0 && !this.engineStalled) {
       const upshiftRpm = this.input.throttle > 0.65 ? redlineRpm - 320 : redlineRpm * 0.74;
       const downshiftRpm = this.input.throttle > 0.75 ? redlineRpm * 0.56 : redlineRpm * 0.34;
       if (this.autoGear < 7 && coupledRpm > upshiftRpm) {
@@ -1701,15 +1818,45 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         this.shiftTimer = 0.11;
         this.engineRpm = Math.min(redlineRpm - 200, this.engineRpm + 1150);
       }
+    } else if (this.transmissionMode === 'semi' && this.manualGear > 1 && kmh < 6 && this.input.throttle < 0.1) {
+      // Semi-auto protects from stalling at a stop by auto-downshifting to 1st
+      this.manualGear = 1;
+      this.autoGear = 1;
     }
-    const newRatio = GEAR_RATIOS[Math.max(0, Math.min(6, this.autoGear - 1))];
+    const activeGearIdx = this.transmissionMode === 'auto'
+      ? Math.max(0, Math.min(6, this.autoGear - 1))
+      : Math.max(0, Math.min(6, Math.max(1, this.manualGear) - 1));
+    const newRatio = GEAR_RATIOS[activeGearIdx];
     const effectiveRedline = redlineRpm * Math.max(0.45, 1 - this.engineDmg * 0.42);
+    const inNeutral = this.transmissionMode !== 'auto' && this.manualGear === 0;
     const targetRpm = this.engineStalled
       ? 0
       : this.shiftTimer > 0
         ? Math.max(1200, this.engineRpm * 0.92)
-        : 850 + wheelRpm * newRatio * rpmScale + this.input.throttle * (kmh < 6 ? 1600 : 260) * Math.max(0.2, 1 - this.engineDmg * 0.75);
+        : inNeutral
+          ? 850 + this.input.throttle * (effectiveRedline - 950)
+          : 850 + wheelRpm * newRatio * rpmScale + this.input.throttle * (kmh < 6 ? 1600 : 260) * Math.max(0.2, 1 - this.engineDmg * 0.75);
     this.engineRpm += (Math.min(effectiveRedline, targetRpm) - this.engineRpm) * 0.24;
+
+    // Eliminate post-crash low-speed idle slides on flat ground when no drive is applied (or engine is stalled)
+    const noDriveInput = this.engineStalled || (this.input.throttle < 0.02 && this.input.brake < 0.02);
+    if (noDriveInput && !this.lateralSledActive && this.autopilotSpeed === 0 && Math.abs(this.speed) < 0.55) {
+      const S = this.solver;
+      const vx = S.vx, vy = S.vy, vz = S.vz;
+      let v2Avg = 0;
+      for (let k = 0; k < 4; k++) {
+        const r = this.refNodes[k];
+        v2Avg += vx[r] * vx[r] + vz[r] * vz[r];
+      }
+      if (v2Avg * 0.25 < 0.36 && this.frame[7] > 0.90) {
+        for (let i = 0; i < S.nodeCount; i++) {
+          vx[i] *= 0.86;
+          vz[i] *= 0.86;
+          if (Math.abs(vy[i]) < 0.15) vy[i] *= 0.86;
+        }
+      }
+    }
+
     this.updateParts();
     this.updateMechanicalDamage();
   }
@@ -1732,12 +1879,35 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       this.engineStalled = true;
     }
 
-    // Fluid leaks: radiator coolant leaks on front crush, motor oil leaks on engine block/pan damage
-    if (!this.coolantLeak && (frontDmg > 0.26 || (isMidRear && rearDmg > 0.34))) {
+    // Zone-based fluid leak triggers & dynamic severity scaling (0 = sealed, 0..1 = slow drip -> gushing stream)
+    const bumperDmg = S.zoneDamageRatio(Zone.Bumper);
+    const fenderDmg = S.zoneDamageRatio(Zone.Fender);
+    // 1. Radiator / Front Grille & Bumper Nodes -> Coolant Leak
+    const radTrigger = Math.max(frontDmg * 0.92, bumperDmg * 0.78);
+    if (radTrigger > 0.16) {
+      const sev = Math.min(1, (radTrigger - 0.16) / 0.64);
+      if (sev > this.coolantSeverity) this.coolantSeverity = sev;
       this.coolantLeak = true;
     }
-    if (!this.oilLeak && this.engineDmg > 0.24) {
+    // 2. Engine Block / Front Subframe / Oil Pan Nodes -> Engine Oil Leak (frontal OR undercarriage impact)
+    const panImpact = Math.max(
+      S.cHit[this.oilPanNodeA] ? Math.abs(S.cvn[this.oilPanNodeA]) : 0,
+      S.cHit[this.oilPanNodeB] ? Math.abs(S.cvn[this.oilPanNodeB]) : 0,
+    );
+    const underCarriageSev = panImpact > 5.5 ? Math.min(1, (panImpact - 5.5) / 14.0) : 0;
+    const oilTrigger = Math.max(this.engineDmg, engSubDmg * 1.15, underCarriageSev);
+    if (oilTrigger > 0.20) {
+      const sev = Math.min(1, (oilTrigger - 0.20) / 0.65);
+      if (sev > this.oilSeverity) this.oilSeverity = sev;
       this.oilLeak = true;
+    }
+    // 3. Rear Subframe / Fuel Tank Nodes -> Fuel Leak (severe rear or side-rear impact)
+    const rearTankImpact = S.cObstacle[this.fuelTankNode] ? Math.min(1, Math.abs(S.cvn[this.fuelTankNode]) / 16.0) : 0;
+    const fuelTrigger = Math.max(rearDmg * 1.05, (this.rearImpacted ? fenderDmg * 0.72 : 0), rearTankImpact);
+    if (fuelTrigger > 0.24) {
+      const sev = Math.min(1, (fuelTrigger - 0.24) / 0.60);
+      if (sev > this.fuelSeverity) this.fuelSeverity = sev;
+      this.fuelLeak = true;
     }
 
     // Per-wheel axle / half-shaft damage (from suspension beam breakage & bent camber/toe)
@@ -2190,35 +2360,61 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.deformer.update(L);
     this.glass.update(frameDt, S.world);
 
-    // Physical 3D engine pushback, broken-mount drop, tilt & crush deformation on impact
+    // Engine stays anchored in place (no pushback into cabin) while visibly bending, tilting & crumpling on impact
     const engD = this.engineDmg;
     if (engD > 0.01) {
-      const pushDir = this.telemetry.midRearEngine ? 1 : -1;
-      const pushZ = pushDir * engD * 0.44;
-      const dropY = -engD * 0.095;
+      const tiltDir = this.telemetry.midRearEngine ? 1 : -1;
       const asym = this.axleDmg[0] - this.axleDmg[1];
-      this.engineMount.position.set(asym * 0.07, dropY, pushZ);
-      this.engineMount.rotation.set(pushDir * engD * 0.24, asym * 0.14, asym * 0.22);
-      this.engineMount.scale.set(1 + engD * 0.05, 1 + engD * 0.07, Math.max(0.72, 1 - engD * 0.26));
+      this.engineMount.position.set(0, 0, 0);
+      this.engineMount.rotation.set(tiltDir * engD * 0.16, asym * 0.12, asym * 0.18);
+      this.engineMount.scale.set(1 + engD * 0.06, 1 + engD * 0.08, Math.max(0.70, 1 - engD * 0.28));
     }
 
-    // Emit 3D asphalt oil/coolant puddles & rising radiator steam / engine smoke from engine bay
-    const engLocalZ = this.telemetry.midRearEngine ? this.profile.rearAxleZ + 0.35 : this.profile.frontAxleZ + 0.28;
-    const engLocalY = this.profile.floorY + 0.32;
-    const engWx = ox + F[6] * engLocalY + F[9] * engLocalZ;
-    const engWy = oy + F[7] * engLocalY + F[10] * engLocalZ;
-    const engWz = oz + F[8] * engLocalY + F[11] * engLocalZ;
-    this.fluids.update(
-      frameDt,
-      S.world,
-      engWx,
-      engWy,
-      engWz,
-      this.coolantLeak,
-      this.oilLeak,
-      engD,
-      Math.abs(this.speed),
-    );
+    // Emit 3D fluid streams, falling droplets, easeOut puddles/trails & steam/vapor from exact deformed ruptured nodes (zero GC)
+    const r3 = this.radiatorNode * 3;
+    const oa3 = this.oilPanNodeA * 3;
+    const ob3 = this.oilPanNodeB * 3;
+    const f3 = this.fuelTankNode * 3;
+    const fe = this.fluidEmit;
+    fe.radX = W[r3];
+    fe.radY = W[r3 + 1];
+    fe.radZ = W[r3 + 2];
+    fe.oilX = 0.5 * (W[oa3] + W[ob3]);
+    fe.oilY = 0.5 * (W[oa3 + 1] + W[ob3 + 1]);
+    fe.oilZ = 0.5 * (W[oa3 + 2] + W[ob3 + 2]);
+    fe.fuelX = W[f3];
+    fe.fuelY = W[f3 + 1];
+    fe.fuelZ = W[f3 + 2];
+    const ref0 = this.refNodes[0];
+    fe.carVx = S.vx[ref0];
+    fe.carVy = S.vy[ref0];
+    fe.carVz = S.vz[ref0];
+    // Trigger high-G metallic sparks & collision dust burst at the active obstacle contact point
+    if (this.impactFxCooldown > 0) this.impactFxCooldown -= frameDt;
+    if (S.lastImpact > 6.5 && this.impactFxCooldown <= 0) {
+      let sx = ox, sy = oy, sz = oz;
+      let hitCount = 0;
+      for (let i = 0; i < S.nodeCount; i++) {
+        if (!S.cObstacle[i]) continue;
+        if (hitCount === 0) { sx = 0; sy = 0; sz = 0; }
+        sx += W[i * 3];
+        sy += W[i * 3 + 1];
+        sz += W[i * 3 + 2];
+        hitCount++;
+      }
+      if (hitCount > 0) {
+        const inv = 1 / hitCount;
+        sx *= inv; sy *= inv; sz *= inv;
+      }
+      this.fluids.emitImpactBurst(sx, sy, sz, Math.min(1.5, S.lastImpact / 18));
+      this.impactFxCooldown = 0.14;
+    }
+
+    fe.coolantSeverity = this.coolantSeverity;
+    fe.oilSeverity = this.oilSeverity;
+    fe.fuelSeverity = this.fuelSeverity;
+    fe.engineDamage = engD;
+    this.fluids.update(frameDt, S.world, fe);
 
     const chassisYaw = Math.atan2(F[9], F[11]);
     for (let w = 0; w < 4; w++) {
@@ -2317,11 +2513,16 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     const S = this.solver;
     const T = this.telemetry;
     T.speedKmh = Math.abs(this.speed) * 3.6;
-    T.gear = Math.abs(this.speed) < 0.3 && this.input.throttle === 0 && this.input.brake === 0
-      ? 'N'
-      : this.gear === -1
-        ? 'R'
-        : String(this.autoGear);
+    T.transmissionMode = this.transmissionMode;
+    if (this.transmissionMode === 'auto') {
+      T.gear = Math.abs(this.speed) < 0.3 && this.input.throttle === 0 && this.input.brake === 0
+        ? 'N'
+        : this.gear === -1
+          ? 'R'
+          : String(this.autoGear);
+    } else {
+      T.gear = this.manualGear === 0 ? 'N' : this.manualGear === -1 ? 'R' : String(this.manualGear);
+    }
     T.rpm = Math.round(this.engineRpm);
     T.throttle = this.input.throttle; T.brake = this.input.brake; T.steer = this.input.steer;
     T.absActive = this.absActive;
@@ -2361,11 +2562,19 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     T.mech.engineStalled = this.engineStalled;
     T.mech.frontAxleDamage = this.frontAxleDmg;
     T.mech.rearAxleDamage = this.rearAxleDmg;
+    T.mech.axleDamage[0] = this.axleDmg[0];
+    T.mech.axleDamage[1] = this.axleDmg[1];
+    T.mech.axleDamage[2] = this.axleDmg[2];
+    T.mech.axleDamage[3] = this.axleDmg[3];
     T.mech.steeringDamage = this.steeringDmg;
     T.mech.steeringLocked = this.steeringLocked;
     T.mech.steeringBiasDeg = Math.round((this.steeringLocked ? this.steeringLockAngle : this.steeringBias) * (180 / Math.PI));
     T.mech.oilLeak = this.oilLeak;
     T.mech.coolantLeak = this.coolantLeak;
+    T.mech.fuelLeak = this.fuelLeak;
+    T.mech.coolantSeverity = this.coolantSeverity;
+    T.mech.oilSeverity = this.oilSeverity;
+    T.mech.fuelSeverity = this.fuelSeverity;
     for (let i = 0; i < this.parts.length; i++) T.parts[i].state = this.parts[i].state;
     T.skinnedVerts = this.deformer.lastSkinnedVerts;
     return T;
@@ -3016,12 +3225,6 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
 
   for (const e of bodyEntries) {
     const list = Array.isArray(e.mat) ? e.mat : [e.mat];
-    const ec = new Vector3();
-    e.box.getCenter(ec);
-    const inGreenhouse =
-      e.box.max.y > profile.beltY(0) + 0.04 &&
-      ec.z >= profile.deckZ - 0.25 &&
-      ec.z <= profile.cowlZ + 0.25;
 
     for (let mi = 0; mi < list.length; mi++) {
       const m = list[mi];
@@ -3031,26 +3234,25 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
         list[mi] = existing;
         continue;
       }
+      const sm = m as MeshStandardMaterial;
+      // On Dodge Challenger SRT Demon, ONLY replace the 3 exact greenhouse window panes (windshield, side windows,
+      // rear window — mat "material" strictly inside upper greenhouse bounds) without polluting shared materials!
+      const isDodgeGreenhousePane =
+        isDodgeDemon &&
+        dodgeGlassMat !== null &&
+        sm.name === 'material' &&
+        e.box.min.y > 0.65 * yS &&
+        e.box.max.y > 0.86 * yS &&
+        e.box.min.z > -0.74 * profile.halfL &&
+        e.box.max.z < 0.50 * profile.halfL;
+
+      if (isDodgeGreenhousePane) {
+        list[mi] = dodgeGlassMat!;
+        continue;
+      }
       if (seenMats.has(m)) continue;
       seenMats.add(m);
       m.visible = true;
-      const sm = m as MeshStandardMaterial;
-      const matTag = `${sm.name || ''} ${e.path}`;
-      const isWindowName = /glass|glss|window|windshield|windscreen|vitre|cab_glass|tinted/i.test(matTag) && !/light|lamp|headlight|taillight|redglass|fog/i.test(matTag);
-      const isDarkOpaqueGreenhouse =
-        isDodgeDemon &&
-        inGreenhouse &&
-        sm.isMeshStandardMaterial &&
-        !sm.map &&
-        !/paint|cars|body|trim|rubber|carbon|chrome|metal|wheel|tire|rim|interior|seat|dash/i.test(matTag) &&
-        sm.color &&
-        (sm.color.r + sm.color.g + sm.color.b) < 0.22;
-
-      if (isDodgeDemon && dodgeGlassMat && (isWindowName || isDarkOpaqueGreenhouse)) {
-        replacedMats.set(m, dodgeGlassMat);
-        list[mi] = dodgeGlassMat;
-        continue;
-      }
 
       const isGlassOrAlpha = /glass|glss|window|alpha|grid|detail|decal|light/i.test(sm.name) || Boolean(sm.alphaMap);
       if (!isGlassOrAlpha && sm.opacity < 0.99 && !sm.transparent) {

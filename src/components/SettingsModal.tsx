@@ -6,7 +6,7 @@ import type {
   SimulatorSettings,
 } from '../types/settings';
 
-type SettingsTab = 'general' | 'sounds' | 'graphics';
+type SettingsTab = 'general' | 'controls' | 'sounds' | 'graphics';
 
 interface SettingsModalProps {
   settings: SimulatorSettings;
@@ -54,6 +54,13 @@ export function SettingsModal({
               onClick={() => setTab('general')}
             >
               General
+            </button>
+            <button
+              type="button"
+              className={`bng-tab-btn ${tab === 'controls' ? 'active' : ''}`}
+              onClick={() => setTab('controls')}
+            >
+              Controls
             </button>
             <button
               type="button"
@@ -123,6 +130,25 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
+                    <strong>Transmission</strong>
+                    <span>Auto, Semi-Auto (E/Q paddle shift), or Full Manual (R / N / 1–7)</span>
+                  </div>
+                  <div className="bng-seg-group">
+                    {(['auto', 'semi', 'manual'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`btn ${settings.transmissionMode === mode ? 'active' : ''}`}
+                        onClick={() => patch('transmissionMode', mode)}
+                      >
+                        {mode === 'auto' ? 'Auto' : mode === 'semi' ? 'Semi' : 'Manual'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bng-setting-row">
+                  <div>
                     <strong>Speed Units</strong>
                     <span>In-game speedometer and telemetry display unit</span>
                   </div>
@@ -178,6 +204,86 @@ export function SettingsModal({
                     <span>Drive WASD / Arrows · Handbrake Space · Map M · Pause Esc</span>
                   </div>
                   <span className="bng-val-chip">Reset: R</span>
+                </div>
+              </div>
+            )}
+
+            {tab === 'controls' && (
+              <div className="bng-settings-section">
+                <h3>Driving &amp; Touch Controls</h3>
+
+                <div className="bng-setting-row">
+                  <div>
+                    <strong>Touch Steering Style</strong>
+                    <span>Choose between interactive rotary Steering Wheel or Left/Right Arrows</span>
+                  </div>
+                  <div className="bng-seg-group">
+                    <button
+                      type="button"
+                      className={`btn ${settings.touchSteering === 'arrows' ? 'active' : ''}`}
+                      onClick={() => patch('touchSteering', 'arrows')}
+                    >
+                      Arrows (◀ ▶)
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn ${settings.touchSteering === 'wheel' ? 'active' : ''}`}
+                      onClick={() => patch('touchSteering', 'wheel')}
+                    >
+                      Steering Wheel
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bng-setting-row">
+                  <div>
+                    <strong>Analog Gas &amp; Brake Pedals</strong>
+                    <span>Slide vertically on pedals for smooth 0%–100% throttle &amp; braking</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`btn btn-menu ${settings.analogPedals ? 'active' : ''}`}
+                    onClick={() => patch('analogPedals', !settings.analogPedals)}
+                  >
+                    {settings.analogPedals ? 'ANALOG ON' : 'DIGITAL'}
+                  </button>
+                </div>
+
+                <div className="bng-setting-row">
+                  <div>
+                    <strong>Transmission Mode</strong>
+                    <span>Auto, Semi-Auto (E/Q or buttons above pedals), or Full Manual (R / N / 1–7)</span>
+                  </div>
+                  <div className="bng-seg-group">
+                    {(['auto', 'semi', 'manual'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`btn ${settings.transmissionMode === mode ? 'active' : ''}`}
+                        onClick={() => patch('transmissionMode', mode)}
+                      >
+                        {mode === 'auto' ? 'Auto' : mode === 'semi' ? 'Semi' : 'Manual'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bng-setting-row">
+                  <div>
+                    <strong>Steering Sensitivity</strong>
+                    <span>Adjusts front wheel steering speed and responsiveness</span>
+                  </div>
+                  <div className="bng-range-wrap">
+                    <input
+                      type="range"
+                      min={0.5}
+                      max={1.5}
+                      step={0.05}
+                      value={settings.steeringSensitivity}
+                      onChange={(e) => patch('steeringSensitivity', Number(e.target.value))}
+                    />
+                    <span className="bng-val-chip">{Math.round(settings.steeringSensitivity * 100)}%</span>
+                  </div>
                 </div>
               </div>
             )}
@@ -296,14 +402,15 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Resolution / Pixel Ratio</strong>
-                    <span>Auto caps 1.25× on tablets &amp; 1.5× on desktop for locked 60 FPS</span>
+                    <strong>Pixel Quality</strong>
+                    <span>Low (0.85×), Medium (balanced), High (1.75×), or Ultra (max native pixels)</span>
                   </div>
                   <div className="bng-seg-group">
                     {([
-                      { id: 'auto', label: 'Auto 60 FPS' },
-                      { id: 'performance', label: 'Performance' },
-                      { id: 'quality', label: 'Quality' },
+                      { id: 'low', label: 'Low' },
+                      { id: 'medium', label: 'Medium' },
+                      { id: 'high', label: 'High' },
+                      { id: 'ultra', label: 'Ultra' },
                     ] as { id: ResolutionMode; label: string }[]).map((r) => (
                       <button
                         key={r.id}
@@ -312,25 +419,6 @@ export function SettingsModal({
                         onClick={() => patch('resolutionMode', r.id)}
                       >
                         {r.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="bng-setting-row">
-                  <div>
-                    <strong>Render Distance</strong>
-                    <span>Full-map camera view range across the 2 km × 2 km Proving Ground</span>
-                  </div>
-                  <div className="bng-seg-group">
-                    {[2200, 3500, 5000].map((d) => (
-                      <button
-                        key={d}
-                        type="button"
-                        className={`btn ${settings.drawDistance === d ? 'active' : ''}`}
-                        onClick={() => patch('drawDistance', d)}
-                      >
-                        {d}m
                       </button>
                     ))}
                   </div>

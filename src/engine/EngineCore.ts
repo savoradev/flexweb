@@ -1,7 +1,7 @@
 import {
-  ACESFilmicToneMapping, BackSide, BufferAttribute, BufferGeometry, Color, CubeCamera, DirectionalLight, FogExp2,
-  HemisphereLight, LinearMipmapLinearFilter, LineBasicMaterial, LineSegments, Matrix4, Mesh, MeshStandardMaterial, Object3D,
-  PCFSoftShadowMap, PerspectiveCamera, PMREMGenerator, Scene, ShaderMaterial, SphereGeometry, SRGBColorSpace,
+  ACESFilmicToneMapping, BackSide, BufferAttribute, BufferGeometry, CanvasTexture, Color, CubeCamera, DirectionalLight, FogExp2,
+  HemisphereLight, LinearMipmapLinearFilter, LineBasicMaterial, LineSegments, Matrix4, Mesh, MeshBasicMaterial, MeshStandardMaterial, Object3D,
+  PCFSoftShadowMap, PerspectiveCamera, PlaneGeometry, PMREMGenerator, Scene, ShaderMaterial, SphereGeometry, SRGBColorSpace,
   Texture, Vector3, WebGLCubeRenderTarget, WebGLRenderer, WebGLRenderTarget,
 } from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -40,7 +40,7 @@ import {
  * downscaling (<= 1024x1024), and the decoupled FixedTimestepLoop.
  */
 
-export type CameraMode = 'chase' | 'orbit' | 'hood' | 'bumper';
+export type CameraMode = 'chase' | 'interior' | 'orbit' | 'hood' | 'bumper';
 
 export interface CarOption {
   id: string;
@@ -180,11 +180,17 @@ export class EngineCore {
   private loadGeneration = 0;
   private readonly memSkinCache = new Map<string, PrecomputedBindingData[]>();
   private paintByCar: Record<string, number> = {};
+  private readonly isMobilePhone: boolean;
+  private shadowFrameCounter = 0;
+  private blobShadow: Mesh | null = null;
 
   constructor(container: HTMLElement, onStats?: (s: EngineStats) => void) {
     this.container = container;
     this.onStats = onStats;
     this.constrained = isConstrainedDevice();
+    this.isMobilePhone =
+      /Android|iPhone|iPod/i.test(navigator.userAgent) ||
+      (this.constrained && Math.min(window.innerWidth || 800, window.innerHeight || 600) < 600);
 
     const saved = readPersistedSettings();
     if (saved.cameraMode && ['chase', 'hood', 'orbit', 'bumper'].includes(saved.cameraMode)) {
@@ -207,16 +213,18 @@ export class EngineCore {
       powerPreference: 'high-performance',
       stencil: false,
       depth: true,
-      preserveDrawingBuffer: true,
+      preserveDrawingBuffer: false,
     });
-    const maxPR = this.constrained ? 1.25 : 1.5;
+    const maxPR = this.isMobilePhone ? 1.0 : this.constrained ? 1.25 : 1.5;
     const pr = Math.min(window.devicePixelRatio || 1, maxPR);
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = !this.isMobilePhone;
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = !this.isMobilePhone;
     this.renderer.shadowMap.type = PCFSoftShadowMap;
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.width = '100%';
@@ -379,22 +387,22 @@ export class EngineCore {
 
     // Smooth dynamic pixelRatio fallback ONLY if frame time exceeds 20 ms (recovers cleanly below 14 ms)
     this.dynamicPRCooldown -= frameDt;
-    if (this.dynamicPRCooldown <= 0 && !this.menuDemoMode && (this.currentSettings?.resolutionMode ?? 'auto') === 'auto') {
+    if (this.dynamicPRCooldown <= 0 && !this.menuDemoMode && (this.currentSettings?.resolutionMode ?? 'medium') === 'medium') {
       const fms = this.loop.frameMs;
-      const baseMax = Math.min(window.devicePixelRatio || 1, this.constrained ? 1.25 : 1.5);
+      const baseMax = Math.min(window.devicePixelRatio || 1, this.isMobilePhone ? 1.0 : this.constrained ? 1.25 : 1.5);
       if (fms > 20.5 && this.dynamicPRScale > 0.72) {
         this.dynamicPRScale = Math.max(0.72, this.dynamicPRScale - 0.08);
-        this.renderer.setPixelRatio(Math.max(0.8, baseMax * this.dynamicPRScale));
+        this.renderer.setPixelRatio(Math.max(0.75, baseMax * this.dynamicPRScale));
         this.dynamicPRCooldown = 1.5;
       } else if (fms < 14.0 && this.dynamicPRScale < 1.0) {
         this.dynamicPRScale = Math.min(1.0, this.dynamicPRScale + 0.05);
-        this.renderer.setPixelRatio(Math.max(0.8, baseMax * this.dynamicPRScale));
+        this.renderer.setPixelRatio(Math.max(0.75, baseMax * this.dynamicPRScale));
         this.dynamicPRCooldown = 2.0;
       }
     }
 
     // Throttled real-time CubeCamera -> PMREM reflections respecting Graphics -> Reflections setting
-    const reflStride = this.reflectionQuality === 'high' ? 2 : this.constrained ? 8 : 5;
+    const reflStride = this.isMobilePhone ? 24 : this.reflectionQuality === 'high' ? 3 : this.constrained ? 12 : 6;
     if (this.reflectionQuality !== 'off' && this.reflFrameCounter++ % reflStride === 0) {
       const F = this.vehicle.getFrame();
       this.cubeCamera.position.set(F[0], F[1] + 0.95, F[2]);
@@ -557,7 +565,7 @@ export class EngineCore {
       this.camera.updateProjectionMatrix();
       if (fog) fog.density = 0;
     } else {
-      this.camera.far = Math.max(3500, this.currentSettings?.drawDistance ?? 3500);
+      this.camera.far = 6500;
       this.camera.updateProjectionMatrix();
       if (fog) fog.density = 0.00006;
     }
@@ -601,16 +609,20 @@ export class EngineCore {
     this.vehicle.steeringSensitivity = s.steeringSensitivity;
     this.vehicle.absEnabled = s.absEnabled;
     this.vehicle.tcsEnabled = s.tcsEnabled;
+    this.vehicle.transmissionMode = s.transmissionMode;
 
     // 2. Sounds volumes & mute
     this.sound.setVolumes(s.masterVolume, s.engineVolume, s.effectsVolume, s.muted);
 
-    // 3. Graphics: Shadows
-    if (s.shadowQuality === 'off') {
+    // 3. Graphics: Shadows (lightweight projected contact blob shadow on mobile phones; throttled shadowMap on tablets/desktop)
+    if (s.shadowQuality === 'off' || (this.isMobilePhone && s.shadowQuality === 'low')) {
       this.renderer.shadowMap.enabled = false;
       this.dirLight.castShadow = false;
+      this.ensureBlobShadow(s.shadowQuality !== 'off');
     } else {
+      this.ensureBlobShadow(false);
       this.renderer.shadowMap.enabled = true;
+      this.renderer.shadowMap.autoUpdate = false;
       this.dirLight.castShadow = true;
       const sz = s.shadowQuality === 'high' ? 2048 : 1024;
       if (this.dirLight.shadow.mapSize.x !== sz) {
@@ -618,6 +630,7 @@ export class EngineCore {
         this.dirLight.shadow.map?.dispose();
         this.dirLight.shadow.map = null;
       }
+      this.renderer.shadowMap.needsUpdate = true;
     }
 
     // 4. Graphics: Real-time Reflections
@@ -628,20 +641,22 @@ export class EngineCore {
       this.scene.environment = (this.envRT ?? this.studioEnvRT).texture;
     }
 
-    // 5. Graphics: Pixel Ratio / Resolution (capped 1.25 mobile/tablet, 1.5 desktop in auto mode)
+    // 5. Graphics: Pixel Quality (Low / Medium / High / Ultra; Medium caps 1.0 phone / 1.25 tablet / 1.5 desktop)
     this.dynamicPRScale = 1.0;
     const dpr = window.devicePixelRatio || 1;
     const targetPR =
-      s.resolutionMode === 'performance'
-        ? Math.min(dpr, 1.0)
-        : s.resolutionMode === 'quality'
-          ? Math.min(dpr, 2.0)
-          : Math.min(dpr, this.constrained ? 1.25 : 1.5);
+      s.resolutionMode === 'low'
+        ? Math.min(dpr, 0.85)
+        : s.resolutionMode === 'high'
+          ? Math.min(dpr, 1.75)
+          : s.resolutionMode === 'ultra'
+            ? Math.max(2.0, Math.min(dpr, 3.0))
+            : Math.min(dpr, this.isMobilePhone ? 1.0 : this.constrained ? 1.25 : 1.5);
     this.renderer.setPixelRatio(targetPR);
     this.onResize();
 
-    // 6. Graphics: Full-Map Draw Distance & Skybox Clouds
-    this.camera.far = this.overheadMapMode ? 6500 : Math.max(3500, s.drawDistance);
+    // 6. Graphics: Full-Map + Skybox Far Plane (6500m > 4800m skyDome radius so skybox is ALWAYS visible)
+    this.camera.far = 6500;
     this.camera.updateProjectionMatrix();
     this.skyDome.visible = s.skyboxClouds;
   }
@@ -696,6 +711,27 @@ export class EngineCore {
     const Zx = F[9], Zy = F[10], Zz = F[11];
 
     if (this.userDragTimer > 0) this.userDragTimer = Math.max(0, this.userDragTimer - dt);
+
+    if (this.cameraMode === 'interior') {
+      const P = this.vehicle.profile;
+      const Xx = F[3], Xy = F[4], Xz = F[5];
+      // Left-hand driver seat eye position inside cabin looking forward over dash & steering wheel
+      const ix = 0.36;
+      const iz = P.cowlZ - 0.56;
+      const iy = Math.min(P.topY(iz) - 0.16, P.beltY(iz) + 0.19);
+      this.camera.position.set(
+        ox + Xx * ix + Yx * iy + Zx * iz,
+        oy + Xy * ix + Yy * iy + Zy * iz,
+        oz + Xz * ix + Yz * iy + Zz * iz,
+      );
+      this.camera.up.set(Yx, Yy, Yz);
+      this.camera.lookAt(
+        ox + Xx * (ix * 0.65) + Yx * (iy - 0.08) + Zx * (iz + 8.0),
+        oy + Xy * (ix * 0.65) + Yy * (iy - 0.08) + Zy * (iz + 8.0),
+        oz + Xz * (ix * 0.65) + Yz * (iy - 0.08) + Zz * (iz + 8.0),
+      );
+      return;
+    }
 
     if (this.cameraMode === 'hood') {
       const cz = this.vehicle.profile.cowlZ - 0.12;
@@ -775,12 +811,69 @@ export class EngineCore {
     this.orbitYaw = Math.atan2(this.camPos.x - ox, this.camPos.z - oz);
   }
 
+  private ensureBlobShadow(enabled: boolean): void {
+    if (!enabled) {
+      if (this.blobShadow) this.blobShadow.visible = false;
+      return;
+    }
+    if (!this.blobShadow) {
+      const size = 128;
+      const cv = document.createElement('canvas');
+      cv.width = size;
+      cv.height = size;
+      const ctx = cv.getContext('2d');
+      if (ctx) {
+        const g = ctx.createRadialGradient(size * 0.5, size * 0.5, size * 0.12, size * 0.5, size * 0.5, size * 0.48);
+        g.addColorStop(0.0, 'rgba(6, 9, 14, 0.72)');
+        g.addColorStop(0.55, 'rgba(6, 9, 14, 0.46)');
+        g.addColorStop(0.82, 'rgba(6, 9, 14, 0.14)');
+        g.addColorStop(1.0, 'rgba(6, 9, 14, 0.0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, size, size);
+      }
+      const tex = new CanvasTexture(cv);
+      const geo = new PlaneGeometry(2.35, 5.15);
+      geo.rotateX(-Math.PI * 0.5);
+      const mat = new MeshBasicMaterial({
+        map: tex,
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -2,
+      });
+      const mesh = new Mesh(geo, mat);
+      mesh.renderOrder = 2;
+      mesh.frustumCulled = false;
+      this.scene.add(mesh);
+      this.blobShadow = mesh;
+    }
+    this.blobShadow.visible = true;
+  }
+
+  private readonly blobGround = { h: 0, nx: 0, ny: 1, nz: 0, mu: 1 };
+
   private updateShadowLight(): void {
     const F = this.vehicle.getFrame();
-    const ox = F[0], oz = F[2];
+    const ox = F[0], oy = F[1], oz = F[2];
+    if (this.blobShadow && this.blobShadow.visible) {
+      this.arena.groundAt(ox, oz, this.blobGround);
+      const groundY = this.blobGround.h;
+      const clearance = Math.max(0, oy - groundY - 0.35);
+      const fade = Math.max(0.18, 1 - clearance * 0.24);
+      const scale = 1 + clearance * 0.14;
+      this.blobShadow.position.set(ox, groundY + 0.018, oz);
+      this.blobShadow.rotation.y = Math.atan2(F[9], F[11]);
+      this.blobShadow.scale.set(scale, 1, scale);
+      (this.blobShadow.material as MeshBasicMaterial).opacity = fade;
+    }
+    if (!this.renderer.shadowMap.enabled) return;
     this.dirLight.position.set(ox + 18, 28, oz + 16);
     this.dirLight.target.position.set(ox, 0, oz);
     this.dirLight.target.updateMatrixWorld();
+    if ((this.shadowFrameCounter++ & 1) === 0) {
+      this.renderer.shadowMap.needsUpdate = true;
+    }
   }
 
   // ================================================================ lattice X-ray

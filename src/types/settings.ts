@@ -1,13 +1,18 @@
 export type ShadowQuality = 'off' | 'low' | 'high';
 export type ReflectionQuality = 'off' | 'low' | 'high';
-export type ResolutionMode = 'auto' | 'performance' | 'quality';
+export type ResolutionMode = 'low' | 'medium' | 'high' | 'ultra';
 export type SpeedUnit = 'kmh' | 'mph';
+export type TransmissionModeSetting = 'auto' | 'semi' | 'manual';
+export type TouchSteeringMode = 'arrows' | 'wheel';
 
 export interface SimulatorSettings {
   // General
   steeringSensitivity: number; // 0.5 .. 1.5
   absEnabled: boolean;
   tcsEnabled: boolean;
+  transmissionMode: TransmissionModeSetting;
+  touchSteering: TouchSteeringMode;
+  analogPedals: boolean;
   speedUnit: SpeedUnit;
   showHud: boolean;
   showDiagnostics: boolean;
@@ -28,6 +33,9 @@ export const DEFAULT_SETTINGS: SimulatorSettings = {
   steeringSensitivity: 1.0,
   absEnabled: true,
   tcsEnabled: true,
+  transmissionMode: 'auto',
+  touchSteering: 'arrows',
+  analogPedals: true,
   speedUnit: 'kmh',
   showHud: true,
   showDiagnostics: true,
@@ -37,7 +45,7 @@ export const DEFAULT_SETTINGS: SimulatorSettings = {
   muted: false,
   shadowQuality: 'low',
   reflectionQuality: 'low',
-  resolutionMode: 'auto',
+  resolutionMode: 'medium',
   drawDistance: 3500,
   skyboxClouds: true,
 };
@@ -48,9 +56,13 @@ export function loadSimulatorSettings(): SimulatorSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
-    const parsed = JSON.parse(raw) as Partial<SimulatorSettings>;
-    const merged = { ...DEFAULT_SETTINGS, ...parsed };
+    const parsed = JSON.parse(raw) as Partial<SimulatorSettings> & { resolutionMode?: string };
+    const merged = { ...DEFAULT_SETTINGS, ...parsed } as SimulatorSettings;
     if (merged.drawDistance < 2200) merged.drawDistance = 3500;
+    const rm = String(parsed.resolutionMode ?? '');
+    if (rm === 'performance') merged.resolutionMode = 'low';
+    else if (rm === 'auto') merged.resolutionMode = 'medium';
+    else if (rm === 'quality') merged.resolutionMode = 'high';
     return merged;
   } catch {
     return { ...DEFAULT_SETTINGS };

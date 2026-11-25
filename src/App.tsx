@@ -37,6 +37,7 @@ const GITHUB_CAR_OPTIONS: CarOption[] = GITHUB_CARS.map((g) => ({
 
 const CAMERA_MODES: { id: CameraMode; label: string }[] = [
   { id: 'chase', label: 'Chase' },
+  { id: 'interior', label: 'Interior' },
   { id: 'hood', label: 'Hood' },
   { id: 'orbit', label: 'Orbit' },
   { id: 'bumper', label: 'Bumper' },
@@ -106,29 +107,72 @@ export function App(): React.ReactElement {
   const [touchEnabled, setTouchEnabled] = useState(() => isTouchDevice);
   const [touchPressed, setTouchPressed] = useState({ left: false, right: false, throttle: false, brake: false, handbrake: false });
 
-  // Automatically request fullscreen + landscape orientation lock on first tap for touch devices
+  const [isFullscreen, setIsFullscreen] = useState(
+    () => typeof document !== 'undefined' && Boolean(document.fullscreenElement),
+  );
+
+  const enterFullscreen = () => {
+    try {
+      const el = document.documentElement as HTMLElement & {
+        webkitRequestFullscreen?: () => Promise<void> | void;
+      };
+      if (!document.fullscreenElement) {
+        if (typeof el.requestFullscreen === 'function') {
+          void el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {
+            void el.requestFullscreen().catch(() => {});
+          });
+        } else if (typeof el.webkitRequestFullscreen === 'function') {
+          el.webkitRequestFullscreen();
+        }
+      }
+      const orient = window.screen?.orientation as unknown as { lock?: (mode: string) => Promise<void> } | undefined;
+      if (orient && typeof orient.lock === 'function') {
+        void orient.lock('landscape').catch(() => {});
+      }
+    } catch {
+      // Ignore browser restrictions
+    }
+  };
+
+  const toggleFullscreen = () => {
+    try {
+      if (document.fullscreenElement) {
+        void document.exitFullscreen?.().catch(() => {});
+      } else {
+        enterFullscreen();
+      }
+    } catch {
+      // Ignore browser restrictions
+    }
+  };
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('webkitfullscreenchange', onFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      document.removeEventListener('webkitfullscreenchange', onFsChange);
+    };
+  }, []);
+
+  // Automatically request true Chrome Android fullscreen + landscape lock on first user interaction
   useEffect(() => {
     if (!isTouchDevice) return;
-    let locked = false;
+    let triggered = false;
     const onFirstTap = () => {
-      if (locked) return;
-      locked = true;
-      try {
-        const el = document.documentElement;
-        if (!document.fullscreenElement && el.requestFullscreen) {
-          void el.requestFullscreen().catch(() => {});
-        }
-        const orient = window.screen.orientation as unknown as { lock?: (mode: string) => Promise<void> } | undefined;
-        if (orient && typeof orient.lock === 'function') {
-          void orient.lock('landscape').catch(() => {});
-        }
-      } catch {
-        // Ignore browser restrictions
-      }
+      if (triggered) return;
+      triggered = true;
+      enterFullscreen();
       window.removeEventListener('pointerdown', onFirstTap);
+      window.removeEventListener('touchstart', onFirstTap);
     };
     window.addEventListener('pointerdown', onFirstTap, { passive: true });
-    return () => window.removeEventListener('pointerdown', onFirstTap);
+    window.addEventListener('touchstart', onFirstTap, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', onFirstTap);
+      window.removeEventListener('touchstart', onFirstTap);
+    };
   }, [isTouchDevice]);
 
   const keyState = useRef({ up: false, down: false, left: false, right: false, space: false });
@@ -139,6 +183,10 @@ export function App(): React.ReactElement {
     saveSimulatorSettings(next);
     engineRef.current?.applySettings(next);
   };
+
+  const analogTouchRef = useRef({ steer: 0, throttle: 0, brake: 0 });
+  const wheelPtrRef = useRef<{ id: number; startX: number } | null>(null);
+  const [analogUI, setAnalogUI] = useState({ steer: 0, throttle: 0, brake: 0 });
 
   const syncVehicleInputs = () => {
     const eng = engineRef.current;
@@ -152,13 +200,13 @@ export function App(): React.ReactElement {
     }
     const k = keyState.current;
     const t = touchState.current;
+    const a = analogTouchRef.current;
     const inp = eng.vehicle.input;
-    inp.throttle = k.up || t.throttle ? 1 : 0;
-    inp.brake = k.down || t.brake ? 1 : 0;
+    inp.throttle = Math.max(k.up ? 1 : 0, t.throttle ? 1 : 0, a.throttle);
+    inp.brake = Math.max(k.down ? 1 : 0, t.brake ? 1 : 0, a.brake);
     inp.handbrake = k.space || t.handbrake ? 1 : 0;
-    const l = k.left || t.left ? 1 : 0;
-    const r = k.right || t.right ? 1 : 0;
-    inp.steer = r - l;
+    const keySteer = (k.right || t.right ? 1 : 0) - (k.left || t.left ? 1 : 0);
+    inp.steer = Math.abs(a.steer) > 0.01 ? a.steer : keySteer;
   };
 
   const saveStudioThumb = (carId: string, shot: string) => {
@@ -416,6 +464,10 @@ export function App(): React.ReactElement {
           engine.loop.timeScale = cur === 1 ? 0.25 : cur === 0.25 ? 0.1 : 1;
           break;
         }
+        case 'KeyE':
+          engine.vehicle.shiftUp(); break;
+        case 'KeyQ':
+          engine.vehicle.shiftDown(); break;
         case 'KeyP':
           setScreen('paused'); break;
         case 'KeyM':
@@ -682,15 +734,11 @@ export function App(): React.ReactElement {
       {/* ---------------- 4. Clean Pause Menu Overlay (Esc) ---------------- */}
       {screen === 'paused' && (
         <PauseMenu
-          showLattice={Boolean(stats?.showLattice)}
-          bodyOpacity={stats?.bodyOpacity ?? 1.0}
           touchEnabled={touchEnabled}
           onContinue={() => setScreen('playing')}
           onOpenMap={() => setScreen('mapview')}
           onOpenCars={() => { setReturnScreen('paused'); setScreen('cars'); }}
           onOpenSettings={() => { setReturnScreen('paused'); setScreen('settings'); }}
-          onToggleLattice={() => engineRef.current?.setShowLattice(!engineRef.current.showLattice)}
-          onChangeOpacity={(v) => engineRef.current?.setBodyOpacity(v)}
           onToggleTouch={() => setTouchEnabled((v) => !v)}
           onMainMenu={() => setScreen('menu')}
         />
@@ -746,6 +794,21 @@ export function App(): React.ReactElement {
                   Cam: {stats?.cameraMode ?? 'chase'}
                 </button>
                 <button
+                  id="toggle-nodes-btn"
+                  type="button"
+                  className={`btn ${stats?.showLattice ? 'active' : ''}`}
+                  title="Show JBeam Nodes & Beams with maximum Ghost bodywork"
+                  onClick={() => {
+                    const eng = engineRef.current;
+                    if (!eng) return;
+                    const nextOn = !eng.showLattice;
+                    eng.setShowLattice(nextOn);
+                    eng.setBodyOpacity(nextOn ? 0.18 : 1.0);
+                  }}
+                >
+                  Nodes: {stats?.showLattice ? 'ON' : 'OFF'}
+                </button>
+                <button
                   type="button"
                   className={`btn ${stats?.timeScale === 0.25 ? 'active' : ''}`}
                   onClick={() => {
@@ -757,20 +820,21 @@ export function App(): React.ReactElement {
                   {stats?.timeScale === 0.25 ? '0.25x' : '1x'}
                 </button>
                 <button
+                  id="toggle-fullscreen-btn"
+                  type="button"
+                  className={`btn ${isFullscreen ? 'active' : ''}`}
+                  title={isFullscreen ? 'Exit Fullscreen' : 'Enter True Fullscreen'}
+                  onClick={toggleFullscreen}
+                >
+                  {isFullscreen ? '⛶ Exit' : '⛶ Full'}
+                </button>
+                <button
                   id="reset-vehicle-btn"
                   type="button"
                   className="btn btn-reset"
                   onClick={() => engineRef.current?.reset()}
                 >
                   Reset (R)
-                </button>
-                <button
-                  id="toggle-sound-btn"
-                  type="button"
-                  className={`btn ${!settings.muted ? 'active' : ''}`}
-                  onClick={() => updateSettings({ ...settings, muted: !settings.muted })}
-                >
-                  {settings.muted ? 'Sound OFF' : 'Sound ON'}
                 </button>
               </div>
             )}
@@ -787,70 +851,231 @@ export function App(): React.ReactElement {
             </aside>
           )}
 
-          {/* Touch Pedals (when enabled) */}
+          {/* Upgraded Touch Controls (Steering Wheel OR Arrows + Shift Buttons ABOVE Pedals + Analog Gas/Brake Pedals) */}
           {settings.showHud && touchEnabled && (
             <div className="touch-layer">
+              {/* Left: Steering Wheel OR Left/Right Arrows */}
               <div className="touch-pad-group">
-                <button
-                  id="touch-steer-left"
-                  type="button"
-                  className={`touch-btn ${touchPressed.left ? 'pressed' : ''}`}
-                  onPointerDown={() => setTouch('left', true)}
-                  onPointerUp={() => setTouch('left', false)}
-                  onPointerCancel={() => setTouch('left', false)}
-                  onPointerLeave={() => setTouch('left', false)}
-                >
-                  <span>◀</span>
-                  <span>LEFT</span>
-                </button>
-                <button
-                  id="touch-steer-right"
-                  type="button"
-                  className={`touch-btn ${touchPressed.right ? 'pressed' : ''}`}
-                  onPointerDown={() => setTouch('right', true)}
-                  onPointerUp={() => setTouch('right', false)}
-                  onPointerCancel={() => setTouch('right', false)}
-                  onPointerLeave={() => setTouch('right', false)}
-                >
-                  <span>▶</span>
-                  <span>RIGHT</span>
-                </button>
+                {settings.touchSteering === 'wheel' ? (
+                  <div
+                    id="touch-steering-wheel"
+                    className="touch-wheel-wrap"
+                    role="slider"
+                    aria-label="Touch Steering Wheel"
+                    aria-valuemin={-100}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(analogUI.steer * 100)}
+                    onPointerDown={(e) => {
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                      engineRef.current?.unlockAudio();
+                      wheelPtrRef.current = { id: e.pointerId, startX: e.clientX };
+                    }}
+                    onPointerMove={(e) => {
+                      if (!wheelPtrRef.current || wheelPtrRef.current.id !== e.pointerId) return;
+                      const dx = e.clientX - wheelPtrRef.current.startX;
+                      const val = Math.max(-1, Math.min(1, dx / 72));
+                      analogTouchRef.current.steer = val;
+                      setAnalogUI((prev) => ({ ...prev, steer: val }));
+                      syncVehicleInputs();
+                    }}
+                    onPointerUp={(e) => {
+                      if (!wheelPtrRef.current || wheelPtrRef.current.id !== e.pointerId) return;
+                      wheelPtrRef.current = null;
+                      analogTouchRef.current.steer = 0;
+                      setAnalogUI((prev) => ({ ...prev, steer: 0 }));
+                      syncVehicleInputs();
+                    }}
+                    onPointerCancel={() => {
+                      wheelPtrRef.current = null;
+                      analogTouchRef.current.steer = 0;
+                      setAnalogUI((prev) => ({ ...prev, steer: 0 }));
+                      syncVehicleInputs();
+                    }}
+                  >
+                    <svg
+                      viewBox="0 0 120 120"
+                      className="touch-wheel-svg"
+                      style={{ transform: `rotate(${analogUI.steer * 135}deg)` }}
+                    >
+                      <circle cx="60" cy="60" r="50" fill="rgba(15,23,42,0.52)" stroke="rgba(226,232,240,0.85)" strokeWidth="11" />
+                      <rect x="56" y="7" width="8" height="14" rx="2" fill="#f59e0b" />
+                      <line x1="15" y1="60" x2="105" y2="60" stroke="rgba(203,213,225,0.85)" strokeWidth="9" strokeLinecap="round" />
+                      <line x1="60" y1="60" x2="60" y2="105" stroke="rgba(203,213,225,0.85)" strokeWidth="9" strokeLinecap="round" />
+                      <circle cx="60" cy="60" r="15" fill="#1e293b" stroke="#f59e0b" strokeWidth="3" />
+                    </svg>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      id="touch-steer-left"
+                      type="button"
+                      className={`touch-btn ${touchPressed.left ? 'pressed' : ''}`}
+                      onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); setTouch('left', true); }}
+                      onPointerUp={() => setTouch('left', false)}
+                      onPointerCancel={() => setTouch('left', false)}
+                    >
+                      <span>◀</span>
+                      <span>LEFT</span>
+                    </button>
+                    <button
+                      id="touch-steer-right"
+                      type="button"
+                      className={`touch-btn ${touchPressed.right ? 'pressed' : ''}`}
+                      onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); setTouch('right', true); }}
+                      onPointerUp={() => setTouch('right', false)}
+                      onPointerCancel={() => setTouch('right', false)}
+                    >
+                      <span>▶</span>
+                      <span>RIGHT</span>
+                    </button>
+                  </>
+                )}
               </div>
-              <div className="touch-pad-group">
-                <button
-                  id="touch-handbrake"
-                  type="button"
-                  className={`touch-btn ${touchPressed.handbrake ? 'pressed' : ''}`}
-                  onPointerDown={() => setTouch('handbrake', true)}
-                  onPointerUp={() => setTouch('handbrake', false)}
-                  onPointerCancel={() => setTouch('handbrake', false)}
-                  onPointerLeave={() => setTouch('handbrake', false)}
-                >
-                  <span>H-BRK</span>
-                </button>
-                <button
-                  id="touch-brake"
-                  type="button"
-                  className={`touch-btn pedal-stop ${touchPressed.brake ? 'pressed' : ''}`}
-                  onPointerDown={() => setTouch('brake', true)}
-                  onPointerUp={() => setTouch('brake', false)}
-                  onPointerCancel={() => setTouch('brake', false)}
-                  onPointerLeave={() => setTouch('brake', false)}
-                >
-                  <span>BRAKE</span>
-                  <span>REV</span>
-                </button>
-                <button
-                  id="touch-throttle"
-                  type="button"
-                  className={`touch-btn pedal-go ${touchPressed.throttle ? 'pressed' : ''}`}
-                  onPointerDown={() => setTouch('throttle', true)}
-                  onPointerUp={() => setTouch('throttle', false)}
-                  onPointerCancel={() => setTouch('throttle', false)}
-                  onPointerLeave={() => setTouch('throttle', false)}
-                >
-                  <span>GAS</span>
-                </button>
+
+              {/* Right: Shift Buttons directly ABOVE Pedals + Handbrake + Analog Brake & Gas Pedals */}
+              <div className="touch-right-stack">
+                {settings.transmissionMode !== 'auto' && (
+                  <div className="touch-shift-row">
+                    <button
+                      id="touch-shift-down"
+                      type="button"
+                      className="touch-shift-btn"
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        engineRef.current?.unlockAudio();
+                        engineRef.current?.vehicle.shiftDown();
+                      }}
+                    >
+                      − SHIFT
+                    </button>
+                    <button
+                      id="touch-shift-up"
+                      type="button"
+                      className="touch-shift-btn up"
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        engineRef.current?.unlockAudio();
+                        engineRef.current?.vehicle.shiftUp();
+                      }}
+                    >
+                      SHIFT +
+                    </button>
+                  </div>
+                )}
+
+                <div className="touch-pad-group touch-pedals-row">
+                  <button
+                    id="touch-handbrake"
+                    type="button"
+                    className={`touch-btn touch-hb-btn ${touchPressed.handbrake ? 'pressed' : ''}`}
+                    onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); setTouch('handbrake', true); }}
+                    onPointerUp={() => setTouch('handbrake', false)}
+                    onPointerCancel={() => setTouch('handbrake', false)}
+                  >
+                    <span>HB</span>
+                    <span>DRIFT</span>
+                  </button>
+
+                  <div
+                    id="touch-brake"
+                    role="slider"
+                    aria-label="Brake Pedal"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round((analogUI.brake || (touchPressed.brake ? 1 : 0)) * 100)}
+                    className={`touch-pedal pedal-stop ${analogUI.brake > 0.05 || touchPressed.brake ? 'pressed' : ''}`}
+                    onPointerDown={(e) => {
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                      engineRef.current?.unlockAudio();
+                      if (settings.analogPedals) {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const val = Math.max(0.15, Math.min(1, (rect.bottom - e.clientY) / rect.height));
+                        analogTouchRef.current.brake = val;
+                        setAnalogUI((prev) => ({ ...prev, brake: val }));
+                        syncVehicleInputs();
+                      } else {
+                        setTouch('brake', true);
+                      }
+                    }}
+                    onPointerMove={(e) => {
+                      if (!settings.analogPedals || e.buttons === 0) return;
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const val = Math.max(0.05, Math.min(1, (rect.bottom - e.clientY) / rect.height));
+                      analogTouchRef.current.brake = val;
+                      setAnalogUI((prev) => ({ ...prev, brake: val }));
+                      syncVehicleInputs();
+                    }}
+                    onPointerUp={() => {
+                      analogTouchRef.current.brake = 0;
+                      setAnalogUI((prev) => ({ ...prev, brake: 0 }));
+                      setTouch('brake', false);
+                    }}
+                    onPointerCancel={() => {
+                      analogTouchRef.current.brake = 0;
+                      setAnalogUI((prev) => ({ ...prev, brake: 0 }));
+                      setTouch('brake', false);
+                    }}
+                  >
+                    <div
+                      className="touch-pedal-fill brake"
+                      style={{ height: `${Math.round((settings.analogPedals ? analogUI.brake : touchPressed.brake ? 1 : 0) * 100)}%` }}
+                    />
+                    <span className="touch-pedal-label">BRAKE</span>
+                    <span className="touch-pedal-pct">
+                      {settings.analogPedals ? `${Math.round(analogUI.brake * 100)}%` : 'REV'}
+                    </span>
+                  </div>
+
+                  <div
+                    id="touch-throttle"
+                    role="slider"
+                    aria-label="Gas Pedal"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round((analogUI.throttle || (touchPressed.throttle ? 1 : 0)) * 100)}
+                    className={`touch-pedal pedal-go ${analogUI.throttle > 0.05 || touchPressed.throttle ? 'pressed' : ''}`}
+                    onPointerDown={(e) => {
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                      engineRef.current?.unlockAudio();
+                      if (settings.analogPedals) {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const val = Math.max(0.15, Math.min(1, (rect.bottom - e.clientY) / rect.height));
+                        analogTouchRef.current.throttle = val;
+                        setAnalogUI((prev) => ({ ...prev, throttle: val }));
+                        syncVehicleInputs();
+                      } else {
+                        setTouch('throttle', true);
+                      }
+                    }}
+                    onPointerMove={(e) => {
+                      if (!settings.analogPedals || e.buttons === 0) return;
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const val = Math.max(0.05, Math.min(1, (rect.bottom - e.clientY) / rect.height));
+                      analogTouchRef.current.throttle = val;
+                      setAnalogUI((prev) => ({ ...prev, throttle: val }));
+                      syncVehicleInputs();
+                    }}
+                    onPointerUp={() => {
+                      analogTouchRef.current.throttle = 0;
+                      setAnalogUI((prev) => ({ ...prev, throttle: 0 }));
+                      setTouch('throttle', false);
+                    }}
+                    onPointerCancel={() => {
+                      analogTouchRef.current.throttle = 0;
+                      setAnalogUI((prev) => ({ ...prev, throttle: 0 }));
+                      setTouch('throttle', false);
+                    }}
+                  >
+                    <div
+                      className="touch-pedal-fill gas"
+                      style={{ height: `${Math.round((settings.analogPedals ? analogUI.throttle : touchPressed.throttle ? 1 : 0) * 100)}%` }}
+                    />
+                    <span className="touch-pedal-label">GAS</span>
+                    <span className="touch-pedal-pct">
+                      {settings.analogPedals ? `${Math.round(analogUI.throttle * 100)}%` : 'GO'}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           )}
