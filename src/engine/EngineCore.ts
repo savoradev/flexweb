@@ -1,7 +1,7 @@
 import {
   ACESFilmicToneMapping, BackSide, BufferAttribute, BufferGeometry, CanvasTexture, Color, CubeCamera, DirectionalLight, FogExp2,
   HemisphereLight, LinearMipmapLinearFilter, LineBasicMaterial, LineSegments, Matrix4, Mesh, MeshBasicMaterial, MeshStandardMaterial, Object3D,
-  PCFSoftShadowMap, PerspectiveCamera, PlaneGeometry, PMREMGenerator, Scene, ShaderMaterial, SphereGeometry, SRGBColorSpace,
+  PCFSoftShadowMap, PerspectiveCamera, PlaneGeometry, PMREMGenerator, Quaternion, Scene, ShaderMaterial, SphereGeometry, SRGBColorSpace,
   Texture, Vector3, WebGLCubeRenderTarget, WebGLRenderer, WebGLRenderTarget,
 } from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -325,14 +325,15 @@ export class EngineCore {
     this.dirLight.position.set(18, 28, 16);
     this.dirLight.castShadow = true;
     this.dirLight.shadow.mapSize.set(1024, 1024);
-    this.dirLight.shadow.camera.near = 4;
-    this.dirLight.shadow.camera.far = 75;
-    const d = 14;
+    this.dirLight.shadow.camera.near = 2;
+    this.dirLight.shadow.camera.far = 90;
+    const d = 15;
     this.dirLight.shadow.camera.left = -d;
     this.dirLight.shadow.camera.right = d;
     this.dirLight.shadow.camera.top = d;
     this.dirLight.shadow.camera.bottom = -d;
-    this.dirLight.shadow.bias = -0.0005;
+    this.dirLight.shadow.bias = -0.00025;
+    this.dirLight.shadow.normalBias = 0.03;
     this.scene.add(this.dirLight);
     this.scene.add(this.dirLight.target);
 
@@ -817,22 +818,41 @@ export class EngineCore {
       return;
     }
     if (!this.blobShadow) {
-      const size = 128;
+      const w = 128;
+      const h = 256;
       const cv = document.createElement('canvas');
-      cv.width = size;
-      cv.height = size;
+      cv.width = w;
+      cv.height = h;
       const ctx = cv.getContext('2d');
       if (ctx) {
-        const g = ctx.createRadialGradient(size * 0.5, size * 0.5, size * 0.12, size * 0.5, size * 0.5, size * 0.48);
-        g.addColorStop(0.0, 'rgba(6, 9, 14, 0.72)');
-        g.addColorStop(0.55, 'rgba(6, 9, 14, 0.46)');
-        g.addColorStop(0.82, 'rgba(6, 9, 14, 0.14)');
-        g.addColorStop(1.0, 'rgba(6, 9, 14, 0.0)');
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, size, size);
+        ctx.clearRect(0, 0, w, h);
+        // Soft car-shaped contact shadow (rounded chassis footprint with feathered penumbra)
+        const drawLayer = (padX: number, padY: number, r: number, alpha: number) => {
+          const x = padX, y = padY, rw = w - padX * 2, rh = h - padY * 2;
+          ctx.beginPath();
+          ctx.moveTo(x + r, y);
+          ctx.lineTo(x + rw - r, y);
+          ctx.quadraticCurveTo(x + rw, y, x + rw, y + r);
+          ctx.lineTo(x + rw, y + rh - r);
+          ctx.quadraticCurveTo(x + rw, y + rh, x + rw - r, y + rh);
+          ctx.lineTo(x + r, y + rh);
+          ctx.quadraticCurveTo(x, y + rh, x, y + rh - r);
+          ctx.lineTo(x, y + r);
+          ctx.quadraticCurveTo(x, y, x + r, y);
+          ctx.closePath();
+          ctx.fillStyle = `rgba(6, 9, 14, ${alpha})`;
+          ctx.fill();
+        };
+        ctx.filter = 'blur(14px)';
+        drawLayer(18, 22, 26, 0.34);
+        ctx.filter = 'blur(8px)';
+        drawLayer(24, 30, 22, 0.42);
+        ctx.filter = 'blur(4px)';
+        drawLayer(30, 38, 18, 0.48);
+        ctx.filter = 'none';
       }
       const tex = new CanvasTexture(cv);
-      const geo = new PlaneGeometry(2.35, 5.15);
+      const geo = new PlaneGeometry(2.25, 4.95);
       geo.rotateX(-Math.PI * 0.5);
       const mat = new MeshBasicMaterial({
         map: tex,
@@ -843,7 +863,7 @@ export class EngineCore {
         polygonOffsetUnits: -2,
       });
       const mesh = new Mesh(geo, mat);
-      mesh.renderOrder = 2;
+      mesh.renderOrder = 1;
       mesh.frustumCulled = false;
       this.scene.add(mesh);
       this.blobShadow = mesh;
@@ -852,27 +872,63 @@ export class EngineCore {
   }
 
   private readonly blobGround = { h: 0, nx: 0, ny: 1, nz: 0, mu: 1 };
+  private readonly blobNormal = new Vector3(0, 1, 0);
+  private readonly blobUp = new Vector3(0, 1, 0);
+  private readonly blobQuat = new Quaternion();
+  private readonly blobYawQuat = new Quaternion();
+  private lastShadowX = Number.NaN;
+  private lastShadowY = Number.NaN;
+  private lastShadowZ = Number.NaN;
+  private lastShadowYaw = Number.NaN;
 
   private updateShadowLight(): void {
     const F = this.vehicle.getFrame();
     const ox = F[0], oy = F[1], oz = F[2];
+    const yaw = Math.atan2(F[9], F[11]);
+
     if (this.blobShadow && this.blobShadow.visible) {
-      this.arena.groundAt(ox, oz, this.blobGround);
-      const groundY = this.blobGround.h;
-      const clearance = Math.max(0, oy - groundY - 0.35);
-      const fade = Math.max(0.18, 1 - clearance * 0.24);
-      const scale = 1 + clearance * 0.14;
-      this.blobShadow.position.set(ox, groundY + 0.018, oz);
-      this.blobShadow.rotation.y = Math.atan2(F[9], F[11]);
-      this.blobShadow.scale.set(scale, 1, scale);
-      (this.blobShadow.material as MeshBasicMaterial).opacity = fade;
+      if (oy < -50 || this.overheadMapMode) {
+        this.blobShadow.scale.set(0, 0, 0);
+      } else {
+        this.arena.groundAt(ox, oz, this.blobGround);
+        const groundY = this.blobGround.h;
+        const clearance = Math.max(0, oy - groundY - 0.38);
+        const fade = Math.max(0.12, 0.88 - clearance * 0.22);
+        const scale = 1 + clearance * 0.12;
+        this.blobShadow.position.set(
+          ox + this.blobGround.nx * 0.025,
+          groundY + this.blobGround.ny * 0.025,
+          oz + this.blobGround.nz * 0.025,
+        );
+        this.blobNormal.set(this.blobGround.nx, this.blobGround.ny, this.blobGround.nz).normalize();
+        this.blobQuat.setFromUnitVectors(this.blobUp, this.blobNormal);
+        this.blobYawQuat.setFromAxisAngle(this.blobUp, yaw);
+        this.blobShadow.quaternion.copy(this.blobQuat).multiply(this.blobYawQuat);
+        this.blobShadow.scale.set(scale, 1, scale);
+        (this.blobShadow.material as MeshBasicMaterial).opacity = fade;
+      }
     }
+
     if (!this.renderer.shadowMap.enabled) return;
-    this.dirLight.position.set(ox + 18, 28, oz + 16);
-    this.dirLight.target.position.set(ox, 0, oz);
-    this.dirLight.target.updateMatrixWorld();
-    if ((this.shadowFrameCounter++ & 1) === 0) {
+
+    // Track vehicle X, Y, Z so shadow never clips on ramps/jumps, and only re-render shadowMap when car moves or deforms
+    const moved =
+      Number.isNaN(this.lastShadowX) ||
+      Math.abs(ox - this.lastShadowX) > 0.004 ||
+      Math.abs(oy - this.lastShadowY) > 0.004 ||
+      Math.abs(oz - this.lastShadowZ) > 0.004 ||
+      Math.abs(yaw - this.lastShadowYaw) > 0.003 ||
+      this.vehicle.solver.lastImpact > 0.2;
+
+    if (moved || (this.shadowFrameCounter++ % 12) === 0) {
+      this.dirLight.position.set(ox + 18, oy + 28, oz + 16);
+      this.dirLight.target.position.set(ox, oy, oz);
+      this.dirLight.target.updateMatrixWorld();
       this.renderer.shadowMap.needsUpdate = true;
+      this.lastShadowX = ox;
+      this.lastShadowY = oy;
+      this.lastShadowZ = oz;
+      this.lastShadowYaw = yaw;
     }
   }
 
@@ -956,6 +1012,7 @@ export class EngineCore {
     this.camPos.set(F[0] - F[9] * 6.2, F[1] + 2.1, F[2] - F[11] * 6.2);
     this.camLook.set(F[0], F[1] + 0.85, F[2]);
     this.camVel.set(0, 0, 0);
+    this.lastShadowX = Number.NaN;
     this.lastResetMs = performance.now() - t0;
   }
 
