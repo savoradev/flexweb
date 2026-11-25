@@ -2357,7 +2357,10 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.root.matrix.copy(this.rootMatrix);
     this.root.matrixWorldNeedsUpdate = true;
 
-    this.deformer.update(L);
+    // Skip expensive CPU vertex skinning & GPU buffer uploads while driving cleanly with zero damage!
+    if (S.peakImpact > 0.05) {
+      this.deformer.update(L);
+    }
     this.glass.update(frameDt, S.world);
 
     // Engine stays anchored in place (no pushback into cabin) while visibly bending, tilting & crumpling on impact

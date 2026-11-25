@@ -356,12 +356,37 @@ export function App(): React.ReactElement {
     };
   }, [screen, loadingState]);
 
+  const hudSpeedRef = useRef<HTMLSpanElement | null>(null);
+  const hudGearRef = useRef<HTMLDivElement | null>(null);
+  const hudRpmTextRef = useRef<HTMLSpanElement | null>(null);
+  const hudRpmFillRef = useRef<HTMLDivElement | null>(null);
+  const hudGPeakRef = useRef<HTMLSpanElement | null>(null);
+  const hudGLiveRef = useRef<HTMLSpanElement | null>(null);
+  const hudAbsRef = useRef<HTMLSpanElement | null>(null);
+  const hudFpsRef = useRef<HTMLSpanElement | null>(null);
+
   // Boot 3D Engine & discover cars
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
     const bootSeq = ++loadSeqRef.current;
     const engine = new EngineCore(el, (s) => setStats({ ...s }));
+    engine.onHudFrame = (tel, fps) => {
+      const mph = settingsRef.current.speedUnit === 'mph';
+      const spd = Math.round(mph ? tel.speedKmh * 0.621371 : tel.speedKmh);
+      if (hudSpeedRef.current) hudSpeedRef.current.textContent = String(spd);
+      if (hudGearRef.current) hudGearRef.current.textContent = tel.gear;
+      if (hudRpmTextRef.current) hudRpmTextRef.current.textContent = `${tel.rpm} RPM`;
+      if (hudRpmFillRef.current) {
+        const pct = Math.min(100, Math.max(0, (tel.rpm / 8200) * 100));
+        hudRpmFillRef.current.style.width = `${pct.toFixed(1)}%`;
+        hudRpmFillRef.current.classList.toggle('redline', pct > 84);
+      }
+      if (hudGPeakRef.current) hudGPeakRef.current.textContent = `MAX ${tel.peakGForce.toFixed(1)} G`;
+      if (hudGLiveRef.current) hudGLiveRef.current.textContent = `Live ${tel.gForce.toFixed(1)} G`;
+      if (hudAbsRef.current) hudAbsRef.current.classList.toggle('active', tel.absActive);
+      if (hudFpsRef.current) hudFpsRef.current.textContent = `${Math.round(fps)} FPS`;
+    };
     engineRef.current = engine;
     (window as unknown as { __flexweb?: EngineCore }).__flexweb = engine;
     engine.applySettings(settings);
@@ -1080,32 +1105,33 @@ export function App(): React.ReactElement {
             </div>
           )}
 
-          {/* Bottom-Right: Modern Minimalist Tachometer */}
+          {/* Bottom-Right: Modern Minimalist Tachometer (60 FPS direct DOM updates, zero React lag) */}
           {settings.showHud && (
             <footer className="hud-cluster hud-cluster-minimal">
               <div className="cluster-main">
                 <div className="speed-readout">
-                  <span id="speed-value" className="speed-value">{speedDisplay}</span>
+                  <span id="speed-value" ref={hudSpeedRef} className="speed-value">{speedDisplay}</span>
                   <span className="speed-unit">{speedUnitLabel}</span>
                 </div>
-                <div id="gear-badge" className="gear-badge">{t?.gear ?? 'N'}</div>
+                <div id="gear-badge" ref={hudGearRef} className="gear-badge">{t?.gear ?? 'N'}</div>
                 <div className="cluster-rpm">
                   <div className="rpm-top">
-                    <span>{t?.rpm ?? 850} RPM</span>
-                    <span className="g-peak">MAX {(t?.peakGForce ?? 0).toFixed(1)} G</span>
+                    <span ref={hudRpmTextRef}>{t?.rpm ?? 850} RPM</span>
+                    <span ref={hudGPeakRef} className="g-peak">MAX {(t?.peakGForce ?? 0).toFixed(1)} G</span>
                   </div>
                   <div className="rpm-track">
                     <div
+                      ref={hudRpmFillRef}
                       className={`rpm-fill ${rpmPct > 84 ? 'redline' : ''}`}
                       style={{ width: `${rpmPct}%` }}
                     />
                   </div>
                   <div className="rpm-sub">
-                    <span>Live {(t?.gForce ?? 0).toFixed(1)} G</span>
+                    <span ref={hudGLiveRef}>Live {(t?.gForce ?? 0).toFixed(1)} G</span>
                     <span>·</span>
-                    <span className={`abs-lamp ${t?.absActive ? 'active' : ''}`}>ABS</span>
+                    <span ref={hudAbsRef} className={`abs-lamp ${t?.absActive ? 'active' : ''}`}>ABS</span>
                     <span>·</span>
-                    <span>{Math.round(stats?.fps ?? 60)} FPS</span>
+                    <span ref={hudFpsRef}>{Math.round(stats?.fps ?? 60)} FPS</span>
                   </div>
                 </div>
               </div>

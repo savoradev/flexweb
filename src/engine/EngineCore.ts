@@ -174,6 +174,7 @@ export class EngineCore {
 
   private statsTimer = 0;
   private onStats?: (s: EngineStats) => void;
+  onHudFrame?: (tel: VehicleTelemetry, fps: number) => void;
   private resizeObserver: ResizeObserver;
   private skinningWorker: Worker | null = null;
   private workerReqId = 1;
@@ -183,6 +184,7 @@ export class EngineCore {
   private readonly isMobilePhone: boolean;
   private shadowFrameCounter = 0;
   private blobShadow: Mesh | null = null;
+  private mobileReflBaked = false;
 
   constructor(container: HTMLElement, onStats?: (s: EngineStats) => void) {
     this.container = container;
@@ -375,7 +377,6 @@ export class EngineCore {
     this.skyUniforms.uTime.value += frameDt;
     this.vehicle.render(alpha, frameDt);
     this.updateCamera(frameDt);
-    this.updateShadowLight();
     if (this.showLattice) this.updateLatticeOverlay();
 
     // Smooth cinematic orbit when Main Menu demo mode is active
@@ -402,25 +403,50 @@ export class EngineCore {
       }
     }
 
-    // Throttled real-time CubeCamera -> PMREM reflections respecting Graphics -> Reflections setting
-    const reflStride = this.isMobilePhone ? 24 : this.reflectionQuality === 'high' ? 3 : this.constrained ? 12 : 6;
-    if (this.reflectionQuality !== 'off' && this.reflFrameCounter++ % reflStride === 0) {
+    // Throttled CubeCamera -> PMREM reflections:
+    // - On mobile phones in Low mode: bake once per spawn (0 ms/frame while driving!)
+    // - Always disable shadowMap during cubeCamera.update() so it NEVER consumes shadowMap.needsUpdate while the car is hidden!
+    const shouldUpdateRefl =
+      this.reflectionQuality !== 'off' &&
+      (this.isMobilePhone
+        ? this.reflectionQuality === 'high'
+          ? (this.reflFrameCounter++ % 180) === 0
+          : !this.mobileReflBaked
+        : (this.reflFrameCounter++ % (this.reflectionQuality === 'high' ? 12 : 30)) === 0);
+
+    if (shouldUpdateRefl) {
+      this.mobileReflBaked = true;
       const F = this.vehicle.getFrame();
       this.cubeCamera.position.set(F[0], F[1] + 0.95, F[2]);
       this.skyDome.position.copy(this.cubeCamera.position);
       const prevVis = this.vehicle.root.visible;
       const prevLat = this.latticeLines ? this.latticeLines.visible : false;
+      const prevBlob = this.blobShadow ? this.blobShadow.visible : false;
+      const prevShadowEnabled = this.renderer.shadowMap.enabled;
+      const prevShadowNeeds = this.renderer.shadowMap.needsUpdate;
+
       this.vehicle.root.visible = false;
       if (this.latticeLines) this.latticeLines.visible = false;
+      if (this.blobShadow) this.blobShadow.visible = false;
+      this.renderer.shadowMap.enabled = false;
+      this.renderer.shadowMap.needsUpdate = false;
+
       this.cubeCamera.update(this.renderer, this.scene);
+
+      this.renderer.shadowMap.enabled = prevShadowEnabled;
+      this.renderer.shadowMap.needsUpdate = prevShadowNeeds;
       this.vehicle.root.visible = prevVis;
       if (this.latticeLines) this.latticeLines.visible = prevLat;
+      if (this.blobShadow) this.blobShadow.visible = prevBlob;
 
       const nextEnv = this.pmrem.fromCubemap(this.cubeRT.texture);
       this.scene.environment = nextEnv.texture;
       if (this.envRT) this.envRT.dispose();
       this.envRT = nextEnv;
     }
+
+    // Update shadow light & blob shadow AFTER cubeCamera so the main render always gets a crisp, complete car shadow!
+    this.updateShadowLight();
 
     this.skyDome.position.copy(this.camera.position);
     this.renderer.render(this.scene, this.camera);
@@ -430,8 +456,14 @@ export class EngineCore {
     this.arena.updateRadarDisplay(FNow[0], FNow[2], liveTel.speedKmh);
     this.sound.update(liveTel, frameDt, this.loop.paused || this.menuDemoMode, this.loop.timeScale);
 
+    // 60 FPS direct DOM HUD update (speedometer, gear, RPM, G-force, FPS — zero React re-renders!)
+    if (this.onHudFrame) {
+      this.onHudFrame(liveTel, this.loop.fps);
+    }
+
+    // Throttled 4 Hz React stats sync (diagnostics bars & damage telemetry only)
     this.statsTimer += frameDt;
-    if (this.onStats && this.statsTimer >= 0.08) {
+    if (this.onStats && this.statsTimer >= 0.25) {
       this.statsTimer = 0;
       this.onStats(this.collectStats());
     }
@@ -1013,6 +1045,7 @@ export class EngineCore {
     this.camLook.set(F[0], F[1] + 0.85, F[2]);
     this.camVel.set(0, 0, 0);
     this.lastShadowX = Number.NaN;
+    this.mobileReflBaked = false;
     this.lastResetMs = performance.now() - t0;
   }
 
@@ -1458,7 +1491,7 @@ export class EngineCore {
     // Dispose previous vehicle completely so only 1 car stays in WebGL/RAM
     this.vehicle.dispose();
     this.vehicle = new SoftBodyVehicle(src, this.arena);
-    this.vehicle.solver.substeps = this.constrained ? 10 : 12;
+    this.vehicle.solver.substeps = this.isMobilePhone ? 8 : this.constrained ? 10 : 12;
     this.vehicle.root.visible = true;
     if (this.currentSettings) {
       this.vehicle.steeringSensitivity = this.currentSettings.steeringSensitivity;
