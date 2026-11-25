@@ -314,8 +314,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     const beams: SolverBuildBeam[] = [];
     const coltris: SolverBuildColtri[] = [];
     const nodeZone: Zone[] = [];
-    const addNode = (x: number, y: number, z: number, mass: number, group: number, zone: Zone, radius = 0.105, friction = 1) => {
-      nodes.push({ x, y, z, mass, radius: Math.max(0.095, radius), group, friction });
+    const addNode = (x: number, y: number, z: number, mass: number, group: number, zone: Zone, radius = 0.12, friction = 1) => {
+      nodes.push({ x, y, z, mass, radius: Math.max(0.115, radius), group, friction });
       nodeZone.push(zone);
       return nodes.length - 1;
     };
@@ -2357,10 +2357,15 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.root.matrix.copy(this.rootMatrix);
     this.root.matrixWorldNeedsUpdate = true;
 
-    // Skip expensive CPU vertex skinning & GPU buffer uploads while driving cleanly with zero damage!
-    if (S.peakImpact > 0.05) {
-      this.deformer.update(L);
+    if (S.world) {
+      S.world.groundAt(ox, oz, this.ground);
+      this.deformer.setGroundPlane(F, this.ground.h, this.ground.nx, this.ground.ny, this.ground.nz);
+      // If vehicle is rolled/pitched onto its roof or sides near the ground, force visual vertex ground-clamp pass
+      if (F[7] < 0.85 || oy - this.ground.h < 0.42) {
+        this.deformer.markAllDirty();
+      }
     }
+    this.deformer.update(L);
     this.glass.update(frameDt, S.world);
 
     // Engine stays anchored in place (no pushback into cabin) while visibly bending, tilting & crumpling on impact

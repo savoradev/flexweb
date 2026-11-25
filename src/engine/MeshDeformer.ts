@@ -539,6 +539,28 @@ export class MeshDeformer {
     }
   }
 
+  private gClampActive = false;
+  private gNx = 0;
+  private gNy = 1;
+  private gNz = 0;
+  private gD0 = 0;
+
+  /**
+   * Configures the body-local ground plane (zero-GC) so skinned vertices of bumpers,
+   * roof, hood, trunk, doors, and fenders can never visually clip below the ground/ramp.
+   */
+  setGroundPlane(frame: Float32Array | Float64Array | null, groundH: number, gnx: number, gny: number, gnz: number): void {
+    if (!frame || frame[1] - groundH > 2.4) {
+      this.gClampActive = false;
+      return;
+    }
+    this.gClampActive = true;
+    this.gNx = frame[3] * gnx + frame[4] * gny + frame[5] * gnz;
+    this.gNy = frame[6] * gnx + frame[7] * gny + frame[8] * gnz;
+    this.gNz = frame[9] * gnx + frame[10] * gny + frame[11] * gnz;
+    this.gD0 = (frame[1] - groundH) * gny - 0.012;
+  }
+
   /**
    * Re-skin every group/sub-mesh whose bound nodes moved. `local` holds interpolated
    * node positions in body space (3 per node). Runs at most once per rendered frame.
@@ -614,6 +636,9 @@ export class MeshDeformer {
     let dirtyUniqueCount = 0;
     let maxD2 = B.maxDeformSq;
 
+    const gClamp = this.gClampActive;
+    const gNx = this.gNx, gNy = this.gNy, gNz = this.gNz, gD0 = this.gD0;
+
     for (let u = 0; u < uCount; u++) {
       const u4 = u * 4;
       const n0 = nodes[u4], n1 = nodes[u4 + 1], n2 = nodes[u4 + 2], n3 = nodes[u4 + 3];
@@ -653,6 +678,15 @@ export class MeshDeformer {
         x += w3 * (local[ni3] + F[f] * ox + F[f + 3] * oy + F[f + 6] * oz);
         y += w3 * (local[ni3 + 1] + F[f + 1] * ox + F[f + 4] * oy + F[f + 7] * oz);
         z += w3 * (local[ni3 + 2] + F[f + 2] * ox + F[f + 5] * oy + F[f + 8] * oz);
+      }
+
+      if (gClamp) {
+        const gd = gD0 + gNx * x + gNy * y + gNz * z;
+        if (gd < 0) {
+          x -= gNx * gd;
+          y -= gNy * gd;
+          z -= gNz * gd;
+        }
       }
 
       const u3 = u * 3;
@@ -769,6 +803,9 @@ export class MeshDeformer {
     const disp = B.disp, uniqueRest = B.uniqueRest;
     const uCount = B.uniqueCount;
 
+    const gClamp = this.gClampActive;
+    const gNx = this.gNx, gNy = this.gNy, gNz = this.gNz, gD0 = this.gD0;
+
     for (let u = 0; u < uCount; u++) {
       const u4 = u * 4, u12 = u * 12;
       let x = 0, y = 0, z = 0;
@@ -781,6 +818,14 @@ export class MeshDeformer {
         x += w * (local[ni3] + F[f] * ox + F[f + 3] * oy + F[f + 6] * oz);
         y += w * (local[ni3 + 1] + F[f + 1] * ox + F[f + 4] * oy + F[f + 7] * oz);
         z += w * (local[ni3 + 2] + F[f + 2] * ox + F[f + 5] * oy + F[f + 8] * oz);
+      }
+      if (gClamp) {
+        const gd = gD0 + gNx * x + gNy * y + gNz * z;
+        if (gd < 0) {
+          x -= gNx * gd;
+          y -= gNy * gd;
+          z -= gNz * gd;
+        }
       }
       const u3 = u * 3;
       disp[u3] = x - uniqueRest[u3];
