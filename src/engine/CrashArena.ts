@@ -1632,26 +1632,29 @@ export class CrashArena implements CollisionWorld {
     const bumpMetalMat = new MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.34, metalness: 0.8, side: DoubleSide });
     const atlasMat = new MeshStandardMaterial({ map: atlasTex, transparent: true, alphaTest: 0.08, roughness: 0.85, metalness: 0.05 });
 
-    const emitMerged = (bucket: BufferGeometry[], mat: MeshStandardMaterial, castShadow: boolean) => {
+    const emitMerged = (bucket: BufferGeometry[], mat: MeshStandardMaterial, castShadow: boolean, receiveShadow = true) => {
       if (bucket.length === 0) return;
       const merged = mergeGeometries(bucket, false);
       for (let i = 0; i < bucket.length; i++) bucket[i].dispose();
       merged.computeBoundingSphere();
       const mesh = new Mesh(merged, mat);
       mesh.castShadow = castShadow;
-      mesh.receiveShadow = true;
+      mesh.receiveShadow = receiveShadow;
+      mesh.frustumCulled = true;
       g.add(mesh);
     };
 
-    emitMerged(whiteStripGeos, whiteMarkMat, false);
-    emitMerged(yellowStripGeos, yellowMarkMat, false);
-    emitMerged(atlasGeos, atlasMat, false);
-    emitMerged(concreteGeos, concreteMat, true);
-    emitMerged(hazardGeos, hazardMat, true);
-    emitMerged(steelGeos, steelMat, true);
-    emitMerged(perimGeos, perimMat, false);
-    emitMerged(bumpMetalGeos, bumpMetalMat, true);
-    emitMerged(bumpPaintGeos, bumpPaintMat, true);
+    emitMerged(whiteStripGeos, whiteMarkMat, false, true);
+    emitMerged(yellowStripGeos, yellowMarkMat, false, true);
+    emitMerged(atlasGeos, atlasMat, false, false);
+    // Keep receiveShadow on concrete/bumps so the vehicle casts crisp shadows onto ramps & barriers,
+    // while disabling castShadow on map-wide static geometry so the directional shadow pass stays ultra-fast!
+    emitMerged(concreteGeos, concreteMat, false, true);
+    emitMerged(hazardGeos, hazardMat, false, true);
+    emitMerged(steelGeos, steelMat, false, false);
+    emitMerged(perimGeos, perimMat, false, false);
+    emitMerged(bumpMetalGeos, bumpMetalMat, false, true);
+    emitMerged(bumpPaintGeos, bumpPaintMat, false, true);
 
     // ---- GPU Instanced Static Props (Arrows, Poles, Bollards, Tyres, Lamp Posts, Containers) ----
     // 1. Directional Arrows
@@ -1672,6 +1675,8 @@ export class CrashArena implements CollisionWorld {
       this.tmpMat.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
       arrowInst.setMatrixAt(i, this.tmpMat);
     }
+    arrowInst.frustumCulled = true;
+    arrowInst.computeBoundingSphere();
     g.add(arrowInst);
 
     // 2. Cylinders -> Instanced Poles, Bollards, Tyres, Lamp Posts
@@ -1706,13 +1711,19 @@ export class CrashArena implements CollisionWorld {
     if (poleMats.length > 0) {
       const pInst = new InstancedMesh(unitCyl, new MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.88, roughness: 0.28 }), poleMats.length);
       poleMats.forEach((m, i) => pInst.setMatrixAt(i, m));
-      pInst.castShadow = true;
+      pInst.castShadow = false;
+      pInst.receiveShadow = false;
+      pInst.frustumCulled = true;
+      pInst.computeBoundingSphere();
       g.add(pInst);
     }
     if (bollardMats.length > 0) {
       const bInst = new InstancedMesh(unitCyl.clone(), new MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.45, metalness: 0.3 }), bollardMats.length);
       bollardMats.forEach((m, i) => bInst.setMatrixAt(i, m));
-      bInst.castShadow = true;
+      bInst.castShadow = false;
+      bInst.receiveShadow = false;
+      bInst.frustumCulled = true;
+      bInst.computeBoundingSphere();
       g.add(bInst);
     }
     if (tyreMats.length > 0) {
@@ -1720,18 +1731,28 @@ export class CrashArena implements CollisionWorld {
       tyreGeo.rotateX(Math.PI / 2);
       const tInst = new InstancedMesh(tyreGeo, new MeshStandardMaterial({ color: 0x18181b, roughness: 0.9 }), tyreMats.length);
       tyreMats.forEach((m, i) => tInst.setMatrixAt(i, m));
-      tInst.castShadow = true;
+      tInst.castShadow = false;
+      tInst.receiveShadow = false;
+      tInst.frustumCulled = true;
+      tInst.computeBoundingSphere();
       g.add(tInst);
     }
     if (lampPosts.length > 0) {
       const postInst = new InstancedMesh(new CylinderGeometry(0.11, 0.14, 6.4, 10), steelMat, lampPosts.length);
       lampPosts.forEach((m, i) => postInst.setMatrixAt(i, m));
-      postInst.castShadow = true;
+      postInst.castShadow = false;
+      postInst.receiveShadow = false;
+      postInst.frustumCulled = true;
+      postInst.computeBoundingSphere();
       g.add(postInst);
 
       const lampHeadMat = new MeshStandardMaterial({ color: 0x334155, emissive: 0xfff3c4, emissiveIntensity: 0.95, roughness: 0.4 });
       const armInst = new InstancedMesh(new BoxGeometry(1.4, 0.14, 0.26), lampHeadMat, lampArms.length);
       lampArms.forEach((m, i) => armInst.setMatrixAt(i, m));
+      armInst.castShadow = false;
+      armInst.receiveShadow = false;
+      armInst.frustumCulled = true;
+      armInst.computeBoundingSphere();
       g.add(armInst);
     }
 
@@ -1759,8 +1780,10 @@ export class CrashArena implements CollisionWorld {
         colObj.setHex(color);
         contInst.setColorAt(i, colObj);
       }
-      contInst.castShadow = true;
-      contInst.receiveShadow = true;
+      contInst.castShadow = false;
+      contInst.receiveShadow = false;
+      contInst.frustumCulled = true;
+      contInst.computeBoundingSphere();
       if (contInst.instanceColor) contInst.instanceColor.needsUpdate = true;
       g.add(contInst);
     }
@@ -1790,7 +1813,8 @@ export class CrashArena implements CollisionWorld {
     if (this.dynJerseyMap.length > 0) {
       this.dynJerseyMesh = new InstancedMesh(jerseyGeometry(2.7), concreteMat, this.dynJerseyMap.length);
       this.dynJerseyMesh.frustumCulled = false;
-      this.dynJerseyMesh.castShadow = true;
+      this.dynJerseyMesh.castShadow = false;
+      this.dynJerseyMesh.receiveShadow = true;
       g.add(this.dynJerseyMesh);
     }
     if (this.dynGuardrailMap.length > 0) {
@@ -1798,7 +1822,7 @@ export class CrashArena implements CollisionWorld {
       const grMat = new MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.82, roughness: 0.34 });
       this.dynGuardrailMesh = new InstancedMesh(grGeo, grMat, this.dynGuardrailMap.length);
       this.dynGuardrailMesh.frustumCulled = false;
-      this.dynGuardrailMesh.castShadow = true;
+      this.dynGuardrailMesh.castShadow = false;
       g.add(this.dynGuardrailMesh);
     }
 
@@ -1812,7 +1836,7 @@ export class CrashArena implements CollisionWorld {
         this.dynCones.length,
       );
       this.dynConeMesh.frustumCulled = false;
-      this.dynConeMesh.castShadow = true;
+      this.dynConeMesh.castShadow = false;
       g.add(this.dynConeMesh);
     }
 
@@ -1826,7 +1850,7 @@ export class CrashArena implements CollisionWorld {
         this.dynBarrels.length,
       );
       this.dynBarrelMesh.frustumCulled = false;
-      this.dynBarrelMesh.castShadow = true;
+      this.dynBarrelMesh.castShadow = false;
       g.add(this.dynBarrelMesh);
     }
     this.syncDynamicVisuals(true, true, true);

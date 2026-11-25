@@ -14,8 +14,8 @@ export interface LoopCallbacks {
 
 export class FixedTimestepLoop {
   readonly fixedDt = 1 / 60;
-  readonly maxFrameDt = 0.065;
-  readonly maxStepsPerFrame = 4;
+  readonly maxFrameDt = 0.033;
+  readonly maxStepsPerFrame = 2;
 
   timeScale = 1;
   paused = false;

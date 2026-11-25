@@ -364,6 +364,11 @@ export function App(): React.ReactElement {
   const hudGLiveRef = useRef<HTMLSpanElement | null>(null);
   const hudAbsRef = useRef<HTMLSpanElement | null>(null);
   const hudFpsRef = useRef<HTMLSpanElement | null>(null);
+  const wheelSvgRef = useRef<SVGSVGElement | null>(null);
+  const brakeFillRef = useRef<HTMLDivElement | null>(null);
+  const brakePctRef = useRef<HTMLSpanElement | null>(null);
+  const gasFillRef = useRef<HTMLDivElement | null>(null);
+  const gasPctRef = useRef<HTMLSpanElement | null>(null);
 
   // Boot 3D Engine & discover cars
   useEffect(() => {
@@ -900,24 +905,25 @@ export function App(): React.ReactElement {
                       const dx = e.clientX - wheelPtrRef.current.startX;
                       const val = Math.max(-1, Math.min(1, dx / 72));
                       analogTouchRef.current.steer = val;
-                      setAnalogUI((prev) => ({ ...prev, steer: val }));
+                      if (wheelSvgRef.current) wheelSvgRef.current.style.transform = `rotate(${val * 135}deg)`;
                       syncVehicleInputs();
                     }}
                     onPointerUp={(e) => {
                       if (!wheelPtrRef.current || wheelPtrRef.current.id !== e.pointerId) return;
                       wheelPtrRef.current = null;
                       analogTouchRef.current.steer = 0;
-                      setAnalogUI((prev) => ({ ...prev, steer: 0 }));
+                      if (wheelSvgRef.current) wheelSvgRef.current.style.transform = 'rotate(0deg)';
                       syncVehicleInputs();
                     }}
                     onPointerCancel={() => {
                       wheelPtrRef.current = null;
                       analogTouchRef.current.steer = 0;
-                      setAnalogUI((prev) => ({ ...prev, steer: 0 }));
+                      if (wheelSvgRef.current) wheelSvgRef.current.style.transform = 'rotate(0deg)';
                       syncVehicleInputs();
                     }}
                   >
                     <svg
+                      ref={wheelSvgRef}
                       viewBox="0 0 120 120"
                       className="touch-wheel-svg"
                       style={{ transform: `rotate(${analogUI.steer * 135}deg)` }}
@@ -1027,26 +1033,33 @@ export function App(): React.ReactElement {
                       const rect = e.currentTarget.getBoundingClientRect();
                       const val = Math.max(0.05, Math.min(1, (rect.bottom - e.clientY) / rect.height));
                       analogTouchRef.current.brake = val;
-                      setAnalogUI((prev) => ({ ...prev, brake: val }));
+                      const pct = Math.round(val * 100);
+                      if (brakeFillRef.current) brakeFillRef.current.style.height = `${pct}%`;
+                      if (brakePctRef.current) brakePctRef.current.textContent = `${pct}%`;
                       syncVehicleInputs();
                     }}
                     onPointerUp={() => {
                       analogTouchRef.current.brake = 0;
+                      if (brakeFillRef.current) brakeFillRef.current.style.height = '0%';
+                      if (brakePctRef.current) brakePctRef.current.textContent = settings.analogPedals ? '0%' : 'REV';
                       setAnalogUI((prev) => ({ ...prev, brake: 0 }));
                       setTouch('brake', false);
                     }}
                     onPointerCancel={() => {
                       analogTouchRef.current.brake = 0;
+                      if (brakeFillRef.current) brakeFillRef.current.style.height = '0%';
+                      if (brakePctRef.current) brakePctRef.current.textContent = settings.analogPedals ? '0%' : 'REV';
                       setAnalogUI((prev) => ({ ...prev, brake: 0 }));
                       setTouch('brake', false);
                     }}
                   >
                     <div
+                      ref={brakeFillRef}
                       className="touch-pedal-fill brake"
                       style={{ height: `${Math.round((settings.analogPedals ? analogUI.brake : touchPressed.brake ? 1 : 0) * 100)}%` }}
                     />
                     <span className="touch-pedal-label">BRAKE</span>
-                    <span className="touch-pedal-pct">
+                    <span ref={brakePctRef} className="touch-pedal-pct">
                       {settings.analogPedals ? `${Math.round(analogUI.brake * 100)}%` : 'REV'}
                     </span>
                   </div>
@@ -1077,26 +1090,33 @@ export function App(): React.ReactElement {
                       const rect = e.currentTarget.getBoundingClientRect();
                       const val = Math.max(0.05, Math.min(1, (rect.bottom - e.clientY) / rect.height));
                       analogTouchRef.current.throttle = val;
-                      setAnalogUI((prev) => ({ ...prev, throttle: val }));
+                      const pct = Math.round(val * 100);
+                      if (gasFillRef.current) gasFillRef.current.style.height = `${pct}%`;
+                      if (gasPctRef.current) gasPctRef.current.textContent = `${pct}%`;
                       syncVehicleInputs();
                     }}
                     onPointerUp={() => {
                       analogTouchRef.current.throttle = 0;
+                      if (gasFillRef.current) gasFillRef.current.style.height = '0%';
+                      if (gasPctRef.current) gasPctRef.current.textContent = settings.analogPedals ? '0%' : 'GO';
                       setAnalogUI((prev) => ({ ...prev, throttle: 0 }));
                       setTouch('throttle', false);
                     }}
                     onPointerCancel={() => {
                       analogTouchRef.current.throttle = 0;
+                      if (gasFillRef.current) gasFillRef.current.style.height = '0%';
+                      if (gasPctRef.current) gasPctRef.current.textContent = settings.analogPedals ? '0%' : 'GO';
                       setAnalogUI((prev) => ({ ...prev, throttle: 0 }));
                       setTouch('throttle', false);
                     }}
                   >
                     <div
+                      ref={gasFillRef}
                       className="touch-pedal-fill gas"
                       style={{ height: `${Math.round((settings.analogPedals ? analogUI.throttle : touchPressed.throttle ? 1 : 0) * 100)}%` }}
                     />
                     <span className="touch-pedal-label">GAS</span>
-                    <span className="touch-pedal-pct">
+                    <span ref={gasPctRef} className="touch-pedal-pct">
                       {settings.analogPedals ? `${Math.round(analogUI.throttle * 100)}%` : 'GO'}
                     </span>
                   </div>

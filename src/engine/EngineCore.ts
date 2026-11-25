@@ -173,6 +173,8 @@ export class EngineCore {
   private latticeCol: Float32Array | null = null;
 
   private statsTimer = 0;
+  private hudTimer = 0;
+  private loggedDrawCalls = false;
   private onStats?: (s: EngineStats) => void;
   onHudFrame?: (tel: VehicleTelemetry, fps: number) => void;
   private resizeObserver: ResizeObserver;
@@ -210,15 +212,16 @@ export class EngineCore {
     const h = Math.max(1, container.clientHeight);
     this.camera = new PerspectiveCamera(54, w / h, 0.14, 3200);
 
+    const dpr = window.devicePixelRatio || 1;
     this.renderer = new WebGLRenderer({
-      antialias: !this.constrained,
+      antialias: !this.constrained && dpr < 1.25,
       powerPreference: 'high-performance',
       stencil: false,
       depth: true,
       preserveDrawingBuffer: false,
     });
     const maxPR = this.isMobilePhone ? 1.0 : this.constrained ? 1.25 : 1.5;
-    const pr = Math.min(window.devicePixelRatio || 1, maxPR);
+    const pr = Math.min(dpr, maxPR);
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
     this.renderer.outputColorSpace = SRGBColorSpace;
@@ -387,19 +390,21 @@ export class EngineCore {
       this.userDragTimer = 2.0;
     }
 
-    // Smooth dynamic pixelRatio fallback ONLY if frame time exceeds 20 ms (recovers cleanly below 14 ms)
+    // Smooth dynamic resolution scaling (steps pixelRatio smoothly between 0.85 and 1.25 on mobile if frame time > 17 ms)
     this.dynamicPRCooldown -= frameDt;
     if (this.dynamicPRCooldown <= 0 && !this.menuDemoMode && (this.currentSettings?.resolutionMode ?? 'medium') === 'medium') {
       const fms = this.loop.frameMs;
-      const baseMax = Math.min(window.devicePixelRatio || 1, this.isMobilePhone ? 1.0 : this.constrained ? 1.25 : 1.5);
-      if (fms > 20.5 && this.dynamicPRScale > 0.72) {
-        this.dynamicPRScale = Math.max(0.72, this.dynamicPRScale - 0.08);
-        this.renderer.setPixelRatio(Math.max(0.75, baseMax * this.dynamicPRScale));
+      const dpr = window.devicePixelRatio || 1;
+      const maxPR = this.isMobilePhone ? Math.min(dpr, 1.25) : this.constrained ? Math.min(dpr, 1.25) : Math.min(dpr, 1.5);
+      const minPR = 0.85;
+      if (fms > 17.0 && this.dynamicPRScale > minPR / Math.max(0.85, maxPR)) {
+        this.dynamicPRScale = Math.max(minPR / Math.max(0.85, maxPR), this.dynamicPRScale - 0.06);
+        this.renderer.setPixelRatio(Math.max(minPR, Math.min(maxPR, maxPR * this.dynamicPRScale)));
+        this.dynamicPRCooldown = 1.0;
+      } else if (fms < 13.5 && this.dynamicPRScale < 1.0) {
+        this.dynamicPRScale = Math.min(1.0, this.dynamicPRScale + 0.04);
+        this.renderer.setPixelRatio(Math.max(minPR, Math.min(maxPR, maxPR * this.dynamicPRScale)));
         this.dynamicPRCooldown = 1.5;
-      } else if (fms < 14.0 && this.dynamicPRScale < 1.0) {
-        this.dynamicPRScale = Math.min(1.0, this.dynamicPRScale + 0.05);
-        this.renderer.setPixelRatio(Math.max(0.75, baseMax * this.dynamicPRScale));
-        this.dynamicPRCooldown = 2.0;
       }
     }
 
@@ -451,13 +456,22 @@ export class EngineCore {
     this.skyDome.position.copy(this.camera.position);
     this.renderer.render(this.scene, this.camera);
 
+    if (!this.loggedDrawCalls) {
+      this.loggedDrawCalls = true;
+      console.info(
+        `[FlexWeb GPU] Startup render stats: calls=${this.renderer.info.render.calls}, triangles=${this.renderer.info.render.triangles}, geometries=${this.renderer.info.memory.geometries}`,
+      );
+    }
+
     const liveTel = this.vehicle.updateTelemetry();
     const FNow = this.vehicle.getFrame();
     this.arena.updateRadarDisplay(FNow[0], FNow[2], liveTel.speedKmh);
     this.sound.update(liveTel, frameDt, this.loop.paused || this.menuDemoMode, this.loop.timeScale);
 
-    // 60 FPS direct DOM HUD update (speedometer, gear, RPM, G-force, FPS — zero React re-renders!)
-    if (this.onHudFrame) {
+    // Throttled 15 Hz direct DOM HUD update (speed, gear, RPM, G-force, FPS — zero React reconciliation!)
+    this.hudTimer += frameDt;
+    if (this.onHudFrame && this.hudTimer >= 0.066) {
+      this.hudTimer = 0;
       this.onHudFrame(liveTel, this.loop.fps);
     }
 
