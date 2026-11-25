@@ -440,6 +440,22 @@ export class SoftBodySolver {
       vz[i] = dz * inv;
     }
     this.applyRestitution();
+
+    // Strict floor clamp for every vehicle node so no body panel, roof, hood, trunk, bumper, door, or detached part can ever sink below ground
+    const world = this.world;
+    if (world) {
+      const gs = this.ground;
+      const rad = this.radius;
+      for (let i = 0; i < n; i++) {
+        if (invMass[i] === 0) continue;
+        world.groundAt(px[i], pz[i], gs);
+        const minY = gs.h + rad[i];
+        if (py[i] < minY) {
+          py[i] = minY;
+          if (vy[i] < 0) vy[i] = 0;
+        }
+      }
+    }
   }
 
   private solveBeams(h: number): void {
@@ -679,12 +695,13 @@ export class SoftBodySolver {
       const r = radius[i];
 
       // 1. Analytical + spatial-hashed ground (ramps, sine waves, cobbles, stairs, ditches, banked bowl)
+      //    Full penetration resolution for EVERY car node (chassis, roof, hood, trunk, bumpers, doors, fenders, engine, detached parts)
       world.groundAt(px[i], pz[i], gs);
       const dg = (py[i] - gs.h) * gs.ny - r;
       if (dg < 0) {
-        const pen = -dg > 0.35 ? 0.055 : -dg;
+        const pen = Math.min(-dg, 1.2);
         this.contact(i, gs.nx, gs.ny, gs.nz, pen, gs.mu, 0);
-        if (-dg > 0.35 && this.vy[i] > 2.5) this.vy[i] = 2.5;
+        if (-dg > 0.25 && this.vy[i] > 2.0) this.vy[i] = 2.0;
       }
 
       // 2. Oriented boxes (NCAP barriers, walls, hydraulic presses, pendulum hammers, guardrails, containers)

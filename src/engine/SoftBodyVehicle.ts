@@ -314,8 +314,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     const beams: SolverBuildBeam[] = [];
     const coltris: SolverBuildColtri[] = [];
     const nodeZone: Zone[] = [];
-    const addNode = (x: number, y: number, z: number, mass: number, group: number, zone: Zone, radius = 0.07, friction = 1) => {
-      nodes.push({ x, y, z, mass, radius, group, friction });
+    const addNode = (x: number, y: number, z: number, mass: number, group: number, zone: Zone, radius = 0.105, friction = 1) => {
+      nodes.push({ x, y, z, mass, radius: Math.max(0.095, radius), group, friction });
       nodeZone.push(zone);
       return nodes.length - 1;
     };
