@@ -267,25 +267,28 @@ export class SoftBodyVehicle implements SubstepForceProvider {
   /** Current gear in semi/manual mode: -1 = R, 0 = N, 1..7 = forward gears. */
   manualGear = 1;
 
-  /** Shift up one gear in Semi or Manual transmission mode (R -> N -> 1..7). */
+  /** Shift up one gear: Semi = R -> N -> D; Manual = R -> N -> 1..7. */
   shiftUp(): void {
     if (this.transmissionMode === 'auto') return;
-    if (this.manualGear < 7) {
+    const maxG = this.transmissionMode === 'semi' ? 1 : 7;
+    if (this.manualGear < maxG) {
       this.manualGear++;
       this.shiftCount++;
       this.shiftTimer = 0.11;
       if (this.manualGear > 0) {
         this.gear = 1;
-        this.autoGear = this.manualGear;
+        if (this.transmissionMode === 'manual') this.autoGear = this.manualGear;
+        else this.autoGear = 1;
       } else if (this.manualGear === -1) {
         this.gear = -1;
       }
     }
   }
 
-  /** Shift down one gear in Semi or Manual transmission mode (7..1 -> N -> R). */
+  /** Shift down one gear: Semi = D -> N -> R; Manual = 7..1 -> N -> R. */
   shiftDown(): void {
     if (this.transmissionMode === 'auto') return;
+    if (this.transmissionMode === 'semi' && this.manualGear > 1) this.manualGear = 1;
     if (this.manualGear > -1) {
       // Prevent shifting directly into Reverse while rolling forward > 12 km/h
       if (this.manualGear === 0 && this.speed > 3.5) return;
@@ -294,8 +297,10 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       this.shiftTimer = 0.09;
       if (this.manualGear > 0) {
         this.gear = 1;
-        this.autoGear = this.manualGear;
-        this.engineRpm = Math.min(7200, this.engineRpm + 950);
+        if (this.transmissionMode === 'manual') {
+          this.autoGear = this.manualGear;
+          this.engineRpm = Math.min(7200, this.engineRpm + 950);
+        }
       } else if (this.manualGear === -1) {
         this.gear = -1;
       }
@@ -1275,7 +1280,9 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         drive = -throttle;
       } else {
         this.gear = 1;
-        this.autoGear = this.manualGear;
+        if (this.transmissionMode === 'manual') {
+          this.autoGear = this.manualGear;
+        }
         drive = throttle;
       }
     }
@@ -1827,7 +1834,10 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     const gIdx = Math.max(0, Math.min(6, this.autoGear - 1));
     const wheelRpm = (kmh / 3.6) / Math.max(0.25, this.profile.wheelRadius) * (60 / (2 * Math.PI));
     const coupledRpm = 850 + wheelRpm * GEAR_RATIOS[gIdx] * rpmScale;
-    if (this.transmissionMode === 'auto' && this.gear === 1 && this.shiftTimer <= 0 && !this.engineStalled) {
+    const autoForwardActive =
+      (this.transmissionMode === 'auto' && this.gear === 1) ||
+      (this.transmissionMode === 'semi' && this.manualGear > 0);
+    if (autoForwardActive && this.shiftTimer <= 0 && !this.engineStalled) {
       const upshiftRpm = this.input.throttle > 0.65 ? redlineRpm - 320 : redlineRpm * 0.74;
       const downshiftRpm = this.input.throttle > 0.75 ? redlineRpm * 0.56 : redlineRpm * 0.34;
       if (this.autoGear < 7 && coupledRpm > upshiftRpm) {
@@ -1840,14 +1850,10 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         this.shiftTimer = 0.11;
         this.engineRpm = Math.min(redlineRpm - 200, this.engineRpm + 1150);
       }
-    } else if (this.transmissionMode === 'semi' && this.manualGear > 1 && kmh < 6 && this.input.throttle < 0.1) {
-      // Semi-auto protects from stalling at a stop by auto-downshifting to 1st
-      this.manualGear = 1;
-      this.autoGear = 1;
     }
-    const activeGearIdx = this.transmissionMode === 'auto'
-      ? Math.max(0, Math.min(6, this.autoGear - 1))
-      : Math.max(0, Math.min(6, Math.max(1, this.manualGear) - 1));
+    const activeGearIdx = this.transmissionMode === 'manual'
+      ? Math.max(0, Math.min(6, Math.max(1, this.manualGear) - 1))
+      : Math.max(0, Math.min(6, this.autoGear - 1));
     const newRatio = GEAR_RATIOS[activeGearIdx];
     const effectiveRedline = redlineRpm * Math.max(0.45, 1 - this.engineDmg * 0.42);
     const inNeutral = this.transmissionMode !== 'auto' && this.manualGear === 0;
@@ -2541,7 +2547,9 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         ? 'N'
         : this.gear === -1
           ? 'R'
-          : String(this.autoGear);
+          : 'D';
+    } else if (this.transmissionMode === 'semi') {
+      T.gear = this.manualGear === 0 ? 'N' : this.manualGear === -1 ? 'R' : 'D';
     } else {
       T.gear = this.manualGear === 0 ? 'N' : this.manualGear === -1 ? 'R' : String(this.manualGear);
     }
