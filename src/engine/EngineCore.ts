@@ -7,6 +7,7 @@ import {
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CrashArena, CrashTestPreset, SKY_COLOR, STUDIO_SHOWROOM_Y } from './CrashArena';
+import { detectDeviceProfile } from '../utils/DeviceDetector';
 import { FixedTimestepLoop } from './FixedTimestepLoop';
 import { heapUsedMB, isConstrainedDevice, Scratch } from './MemoryGuard';
 import {
@@ -1321,7 +1322,9 @@ export class EngineCore {
     gen: number,
     onProgress?: LoadProgressCallback,
   ): Promise<void> {
-    const maxTexDim = this.constrained ? 512 : 1024;
+    const devType = detectDeviceProfile().deviceType;
+    const isMobileOrTablet = this.constrained || devType === 'phone' || devType === 'tablet';
+    const maxTexDim = isMobileOrTablet ? 512 : 1024;
 
     // Decode & resize oversized textures asynchronously in parallel with IndexedDB cache lookup
     onProgress?.('Decoding & optimizing textures…', 52);
@@ -1329,7 +1332,7 @@ export class EngineCore {
     console.time('[FlexWeb Load] GPU texture decode/resize');
     const [cached] = await Promise.all([
       cachePromise,
-      downscaleLargeTexturesAsync(sceneRoot, maxTexDim),
+      downscaleLargeTexturesAsync(sceneRoot, maxTexDim, isMobileOrTablet),
     ]);
     console.timeEnd('[FlexWeb Load] GPU texture decode/resize');
     if (gen !== this.loadGeneration) return;
@@ -1654,7 +1657,7 @@ function yieldFrame(): Promise<void> {
  * off the main thread using `createImageBitmap(..., { resizeWidth, resizeHeight })`,
  * without closing source bitmaps that may be shared across GLB textures.
  */
-async function downscaleLargeTexturesAsync(root: Object3D, maxDim: number): Promise<void> {
+async function downscaleLargeTexturesAsync(root: Object3D, maxDim: number, isMobileOrTablet: boolean): Promise<void> {
   if (typeof createImageBitmap !== 'function') return;
   const seen = new Set<Texture>();
   const texKeys: (keyof MeshStandardMaterial)[] = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap'];
@@ -1670,6 +1673,8 @@ async function downscaleLargeTexturesAsync(root: Object3D, maxDim: number): Prom
         const tex = sm[k] as Texture | null | undefined;
         if (!tex || !tex.isTexture || seen.has(tex)) continue;
         seen.add(tex);
+        tex.generateMipmaps = true;
+        tex.anisotropy = isMobileOrTablet ? 1 : Math.min(4, tex.anisotropy || 1);
         const img = tex.image as (ImageBitmapSource & { width?: number; height?: number }) | undefined;
         if (!img || !img.width || !img.height) continue;
         const w = img.width, h = img.height;

@@ -68,6 +68,8 @@ function makeCanvas(size: number): HTMLCanvasElement {
   return c;
 }
 
+import { detectDeviceProfile } from '../utils/DeviceDetector';
+
 function configureTex(
   canvas: HTMLCanvasElement,
   srgb: boolean,
@@ -76,11 +78,13 @@ function configureTex(
   anisotropy = 4,
 ): CanvasTexture {
   const tex = new CanvasTexture(canvas);
+  const dt = detectDeviceProfile().deviceType;
   tex.wrapS = RepeatWrapping;
   tex.wrapT = RepeatWrapping;
   tex.repeat.set(repeatX, repeatY);
+  tex.generateMipmaps = true;
   if (srgb) tex.colorSpace = SRGBColorSpace;
-  tex.anisotropy = anisotropy;
+  tex.anisotropy = dt === 'phone' || dt === 'tablet' ? 1 : anisotropy;
   tex.userData.sharedProcedural = true;
   tex.needsUpdate = true;
   return tex;

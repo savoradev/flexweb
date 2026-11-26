@@ -571,6 +571,7 @@ export class MeshDeformer {
       any |= grpMoved;
     }
     this.lastSkinnedVerts = 0;
+    this.hasDeformedThisFrame = false;
     if (!any) return;
 
     this.computeFrames(local, this.frames);
@@ -600,6 +601,8 @@ export class MeshDeformer {
   }
 
   lowQualityNormals = false;
+  hasDeformedThisFrame = false;
+  dirtyBounds = false;
   private normalFrameCounter = 0;
 
   /**
@@ -616,6 +619,7 @@ export class MeshDeformer {
     const uCount = B.uniqueCount;
     let dirtyUniqueCount = 0;
     let maxD2 = B.maxDeformSq;
+    let maxFrameDeltaSq = 0;
 
     for (let u = 0; u < uCount; u++) {
       const u4 = u * 4;
@@ -662,6 +666,11 @@ export class MeshDeformer {
       const dx = x - uniqueRest[u3];
       const dy = y - uniqueRest[u3 + 1];
       const dz = z - uniqueRest[u3 + 2];
+      const ddx = dx - disp[u3];
+      const ddy = dy - disp[u3 + 1];
+      const ddz = dz - disp[u3 + 2];
+      const fd2 = ddx * ddx + ddy * ddy + ddz * ddz;
+      if (fd2 > maxFrameDeltaSq) maxFrameDeltaSq = fd2;
       disp[u3] = dx;
       disp[u3 + 1] = dy;
       disp[u3 + 2] = dz;
@@ -672,7 +681,10 @@ export class MeshDeformer {
     }
 
     B.maxDeformSq = maxD2;
-    if (dirtyUniqueCount === 0) return 0;
+    // Skip GPU vertex buffer upload & normal recomputation if actual frame strain <= 0.001 m (1e-6 sq)
+    if (dirtyUniqueCount === 0 || maxFrameDeltaSq <= 1e-6) return 0;
+    this.hasDeformedThisFrame = true;
+    this.dirtyBounds = true;
 
     // Targeted local computeVertexNormals strictly on triangles touching deformed vertices (throttled to every 2nd frame on Low Settings)
     const allowNormalsThisFrame = !this.lowQualityNormals || ((this.normalFrameCounter++ & 1) === 0);

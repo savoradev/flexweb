@@ -261,8 +261,10 @@ export class FluidLeakSystem {
   private readonly pSpreadSpeed = new Float32Array(MAX_PUDDLES);
   private readonly pStretch = new Float32Array(MAX_PUDDLES);
   private readonly pActive = new Uint8Array(MAX_PUDDLES);
+  private readonly pHidden = new Uint8Array(MAX_PUDDLES);
   private puddleCursor = 0;
   private puddleDirty = false;
+  private hasActivePuddles = false;
 
   // High-G metallic collision sparks (64-slot zero-GC pool)
   private readonly spX = new Float32Array(MAX_SPARKS);
@@ -573,6 +575,8 @@ export class FluidLeakSystem {
       ? Math.min(3.4, 1.35 + speed * 0.14)
       : 0.90 + ((idx * 7) % 5) * 0.05;
     this.pActive[idx] = 1;
+    this.pHidden[idx] = 0;
+    this.hasActivePuddles = true;
 
     this.puddleMesh.setColorAt(idx, this.fluidColor(type));
     if (this.puddleMesh.instanceColor) this.puddleMesh.instanceColor.needsUpdate = true;
@@ -727,11 +731,33 @@ export class FluidLeakSystem {
       if (aliveDrops === 0) this.dropMesh.visible = false;
     }
 
-    // 3. Smooth exponential ease-out viscous spreading on growing ground puddles
-    if (this.puddleDirty) {
+    // 3. Smooth exponential ease-out viscous spreading & 80m spatial culling on ground puddles
+    if (this.hasActivePuddles) {
+      const PUDDLE_SLEEP_SQ = 80 * 80;
       let stillGrowing = false;
+      let matrixDirty = false;
       for (let i = 0; i < MAX_PUDDLES; i++) {
         if (!this.pActive[i]) continue;
+        const dx = this.pX[i] - emit.oilX;
+        const dz = this.pZ[i] - emit.oilZ;
+        if (dx * dx + dz * dz > PUDDLE_SLEEP_SQ) {
+          if (!this.pHidden[i]) {
+            this.pHidden[i] = 1;
+            this.pos.set(0, -500, 0);
+            this.quat.identity();
+            this.scl.set(0, 0, 0);
+            this.mat4.compose(this.pos, this.quat, this.scl);
+            this.puddleMesh.setMatrixAt(i, this.mat4);
+            matrixDirty = true;
+          }
+          continue;
+        }
+
+        const wokeUp = this.pHidden[i] === 1;
+        if (wokeUp) this.pHidden[i] = 0;
+
+        if (!this.puddleDirty && !wokeUp) continue;
+
         const cur = this.pCurScale[i];
         const tgt = this.pTargetScale[i];
         const diff = tgt - cur;
@@ -749,8 +775,9 @@ export class FluidLeakSystem {
         this.scl.set(sc, 1, sc * this.pStretch[i]);
         this.mat4.compose(this.pos, this.quat, this.scl);
         this.puddleMesh.setMatrixAt(i, this.mat4);
+        matrixDirty = true;
       }
-      this.puddleMesh.instanceMatrix.needsUpdate = true;
+      if (matrixDirty) this.puddleMesh.instanceMatrix.needsUpdate = true;
       this.puddleDirty = stillGrowing;
     }
 
@@ -925,6 +952,7 @@ export class FluidLeakSystem {
     this.streamPuddleTimer.fill(0);
     this.dActive.fill(0);
     this.pActive.fill(0);
+    this.pHidden.fill(0);
     this.pVolume.fill(0);
     this.pCurScale.fill(0);
     this.pTargetScale.fill(0);
@@ -941,6 +969,7 @@ export class FluidLeakSystem {
     this.smokeTimer = 0;
     this.vaporTimer = 0;
     this.puddleDirty = false;
+    this.hasActivePuddles = false;
     this.activeSmokeCount = 0;
 
     this.quat.identity();

@@ -6,6 +6,7 @@ import {
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { BOX_STRIDE, CYL_STRIDE, ROLLER_STRIDE, CollisionWorld, GroundSample, SoftBodySolver } from './SoftBodySolver';
 import { getAsphaltTextures, getConcreteTextures, isSharedProceduralTexture } from './ProceduralTextures';
+import { getCachedLambertMaterial, getCachedStandardMaterial } from './MaterialRegistry';
 import { SpatialBoundsItem, SpatialHashGrid } from './SpatialHashGrid';
 
 /** Y coordinate of the underground pure-white studio showroom floor (far below the y = 0 map). */
@@ -51,6 +52,7 @@ interface DynamicBarrier {
   tilt: number; vTilt: number;
   hx: number; hy: number; hz: number;
   guardrail: boolean;
+  sleepState?: boolean;
 }
 
 interface DynamicCone {
@@ -59,6 +61,7 @@ interface DynamicCone {
   vx: number; vy: number; vz: number;
   tiltX: number; tiltZ: number;
   vTiltX: number; vTiltZ: number;
+  sleepState?: boolean;
 }
 
 interface DynamicBarrel {
@@ -67,6 +70,7 @@ interface DynamicBarrel {
   vx: number; vy: number; vz: number;
   tiltX: number; tiltZ: number;
   vTiltX: number; vTiltZ: number;
+  sleepState?: boolean;
 }
 
 interface PendulumHammer {
@@ -812,12 +816,21 @@ export class CrashArena implements CollisionWorld {
       this.syncMachineryVisuals();
     }
 
-    // 2. Movable Concrete Jersey Barriers & Deformable W-Beam Highway Guardrails
+    // 2. Movable Concrete Jersey Barriers & Deformable W-Beam Highway Guardrails (80m spatial sleep)
+    const SLEEP_DIST_SQ = 80 * 80;
     let barriersDirty = false;
     for (let i = 0; i < this.dynBarriers.length; i++) {
       const b = this.dynBarriers[i];
       const dCarX = b.x - carX, dCarZ = b.z - carZ;
-      const nearCar = dCarX * dCarX + dCarZ * dCarZ < (b.guardrail ? 16 * 16 : 10 * 10);
+      const dist2 = dCarX * dCarX + dCarZ * dCarZ;
+      const shouldSleep = dist2 > SLEEP_DIST_SQ;
+      if (Boolean(b.sleepState) !== shouldSleep) {
+        b.sleepState = shouldSleep;
+        if (!b.guardrail) barriersDirty = true;
+      }
+      if (shouldSleep) continue;
+
+      const nearCar = dist2 < (b.guardrail ? 16 * 16 : 10 * 10);
 
       if (nearCar) {
         const cosY = Math.cos(b.yaw), sinY = Math.sin(b.yaw);
@@ -870,12 +883,20 @@ export class CrashArena implements CollisionWorld {
       }
     }
 
-    // 3. Movable Construction Cones (with distant sleeping)
+    // 3. Movable Construction Cones (80m spatial culling & physics sleep)
     let conesDirty = false;
     for (let i = 0; i < this.dynCones.length; i++) {
       const c = this.dynCones[i];
       const dCarX = c.x - carX, dCarZ = c.z - carZ;
-      if (dCarX * dCarX + dCarZ * dCarZ < 64) {
+      const dist2 = dCarX * dCarX + dCarZ * dCarZ;
+      const shouldSleep = dist2 > SLEEP_DIST_SQ;
+      if (Boolean(c.sleepState) !== shouldSleep) {
+        c.sleepState = shouldSleep;
+        conesDirty = true;
+      }
+      if (shouldSleep) continue;
+
+      if (dist2 < 64) {
         for (let n = 0; n < nCount; n += 3) {
           if (py[n] > 0.85) continue;
           const dx = c.x - px[n], dz = c.z - pz[n];
@@ -911,12 +932,20 @@ export class CrashArena implements CollisionWorld {
       }
     }
 
-    // 4. Movable Physics Crash Barrels (zero-GC rigid body scatter & tumble)
+    // 4. Movable Physics Crash Barrels (80m spatial culling & zero-GC rigid body scatter)
     let barrelsDirty = false;
     for (let i = 0; i < this.dynBarrels.length; i++) {
       const b = this.dynBarrels[i];
       const bdx = b.x - carX, bdz = b.z - carZ;
-      if (bdx * bdx + bdz * bdz < 22 * 22) {
+      const dist2 = bdx * bdx + bdz * bdz;
+      const shouldSleep = dist2 > SLEEP_DIST_SQ;
+      if (Boolean(b.sleepState) !== shouldSleep) {
+        b.sleepState = shouldSleep;
+        barrelsDirty = true;
+      }
+      if (shouldSleep) continue;
+
+      if (dist2 < 22 * 22) {
         for (let n = 0; n < nCount; n += 2) {
           if (py[n] > 1.15) continue;
           const dx = b.x - px[n], dz = b.z - pz[n];
@@ -952,12 +981,20 @@ export class CrashArena implements CollisionWorld {
       }
     }
 
-    // 5. Knockable Crash-Test Checkerboard Blocks (zero-GC scatter & tumble)
+    // 5. Knockable Crash-Test Checkerboard Blocks (80m spatial culling & zero-GC scatter)
     let blocksDirty = false;
     for (let i = 0; i < this.dynBlocks.length; i++) {
       const b = this.dynBlocks[i];
       const bdx = b.x - carX, bdz = b.z - carZ;
-      if (bdx * bdx + bdz * bdz < 22 * 22) {
+      const dist2 = bdx * bdx + bdz * bdz;
+      const shouldSleep = dist2 > SLEEP_DIST_SQ;
+      if (Boolean(b.sleepState) !== shouldSleep) {
+        b.sleepState = shouldSleep;
+        blocksDirty = true;
+      }
+      if (shouldSleep) continue;
+
+      if (dist2 < 22 * 22) {
         for (let n = 0; n < nCount; n += 2) {
           if (py[n] > 1.15) continue;
           const dx = b.x - px[n], dz = b.z - pz[n];
@@ -1076,7 +1113,11 @@ export class CrashArena implements CollisionWorld {
           this.tmpPos.set(b.x, b.hy * (1 - Math.abs(Math.sin(b.tilt)) * 0.35), b.z);
           this.tmpEuler.set(0, b.yaw, b.tilt, 'YXZ');
           this.tmpQuat.setFromEuler(this.tmpEuler);
-          this.tmpScale.set(1, 1, 1);
+          if (b.sleepState) {
+            this.tmpScale.set(0, 0, 0);
+          } else {
+            this.tmpScale.set(1, 1, 1);
+          }
           this.tmpMat.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
           this.dynJerseyMesh.setMatrixAt(k, this.tmpMat);
         }
@@ -1096,9 +1137,13 @@ export class CrashArena implements CollisionWorld {
       }
     }
     if (updateCones && this.dynConeMesh) {
-      this.tmpScale.set(1, 1, 1);
       for (let i = 0; i < this.dynCones.length; i++) {
         const c = this.dynCones[i];
+        if (c.sleepState) {
+          this.tmpScale.set(0, 0, 0);
+        } else {
+          this.tmpScale.set(1, 1, 1);
+        }
         this.tmpPos.set(c.x, c.y + 0.34 * Math.cos(Math.min(1.4, Math.hypot(c.tiltX, c.tiltZ))) + 0.08, c.z);
         this.tmpEuler.set(c.tiltX, 0, c.tiltZ, 'XYZ');
         this.tmpQuat.setFromEuler(this.tmpEuler);
@@ -1108,9 +1153,13 @@ export class CrashArena implements CollisionWorld {
       this.dynConeMesh.instanceMatrix.needsUpdate = true;
     }
     if (updateBarrels && this.dynBarrelMesh) {
-      this.tmpScale.set(1, 1, 1);
       for (let i = 0; i < this.dynBarrels.length; i++) {
         const b = this.dynBarrels[i];
+        if (b.sleepState) {
+          this.tmpScale.set(0, 0, 0);
+        } else {
+          this.tmpScale.set(1, 1, 1);
+        }
         const tiltMag = Math.min(1.57, Math.hypot(b.tiltX, b.tiltZ));
         const cy = b.y + 0.46 * Math.cos(tiltMag) + 0.30 * Math.sin(tiltMag);
         this.tmpPos.set(b.x, cy, b.z);
@@ -1122,9 +1171,13 @@ export class CrashArena implements CollisionWorld {
       this.dynBarrelMesh.instanceMatrix.needsUpdate = true;
     }
     if (updateBlocks && this.dynBlockMesh) {
-      this.tmpScale.set(1, 1, 1);
       for (let i = 0; i < this.dynBlocks.length; i++) {
         const b = this.dynBlocks[i];
+        if (b.sleepState) {
+          this.tmpScale.set(0, 0, 0);
+        } else {
+          this.tmpScale.set(1, 1, 1);
+        }
         this.tmpPos.set(b.x, b.y + 0.38, b.z);
         this.tmpEuler.set(b.tiltX, 0, b.tiltZ, 'XYZ');
         this.tmpQuat.setFromEuler(this.tmpEuler);
@@ -1753,7 +1806,7 @@ export class CrashArena implements CollisionWorld {
 
     const unitCyl = new CylinderGeometry(0.5, 0.5, 1.0, 16);
     if (poleMats.length > 0) {
-      const pInst = new InstancedMesh(unitCyl, new MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.88, roughness: 0.28 }), poleMats.length);
+      const pInst = new InstancedMesh(unitCyl, getCachedLambertMaterial({ color: 0x94a3b8 }), poleMats.length);
       poleMats.forEach((m, i) => pInst.setMatrixAt(i, m));
       pInst.castShadow = false;
       pInst.receiveShadow = false;
@@ -1762,7 +1815,7 @@ export class CrashArena implements CollisionWorld {
       g.add(pInst);
     }
     if (bollardMats.length > 0) {
-      const bInst = new InstancedMesh(unitCyl.clone(), new MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.45, metalness: 0.3 }), bollardMats.length);
+      const bInst = new InstancedMesh(unitCyl.clone(), getCachedLambertMaterial({ color: 0xf59e0b }), bollardMats.length);
       bollardMats.forEach((m, i) => bInst.setMatrixAt(i, m));
       bInst.castShadow = false;
       bInst.receiveShadow = false;
@@ -1773,7 +1826,7 @@ export class CrashArena implements CollisionWorld {
     if (tyreMats.length > 0) {
       const tyreGeo = new TorusGeometry(0.32, 0.11, 8, 16);
       tyreGeo.rotateX(Math.PI / 2);
-      const tInst = new InstancedMesh(tyreGeo, new MeshStandardMaterial({ color: 0x18181b, roughness: 0.9 }), tyreMats.length);
+      const tInst = new InstancedMesh(tyreGeo, getCachedLambertMaterial({ color: 0x18181b }), tyreMats.length);
       tyreMats.forEach((m, i) => tInst.setMatrixAt(i, m));
       tInst.castShadow = false;
       tInst.receiveShadow = false;
@@ -1782,7 +1835,7 @@ export class CrashArena implements CollisionWorld {
       g.add(tInst);
     }
     if (lampPosts.length > 0) {
-      const postInst = new InstancedMesh(new CylinderGeometry(0.11, 0.14, 6.4, 10), steelMat, lampPosts.length);
+      const postInst = new InstancedMesh(new CylinderGeometry(0.11, 0.14, 6.4, 10), getCachedLambertMaterial({ color: 0x64748b }), lampPosts.length);
       lampPosts.forEach((m, i) => postInst.setMatrixAt(i, m));
       postInst.castShadow = false;
       postInst.receiveShadow = false;
@@ -1790,7 +1843,7 @@ export class CrashArena implements CollisionWorld {
       postInst.computeBoundingSphere();
       g.add(postInst);
 
-      const lampHeadMat = new MeshStandardMaterial({ color: 0x334155, emissive: 0xfff3c4, emissiveIntensity: 0.95, roughness: 0.4 });
+      const lampHeadMat = getCachedLambertMaterial({ color: 0x334155, emissive: 0xfff3c4, emissiveIntensity: 0.95 });
       const armInst = new InstancedMesh(new BoxGeometry(1.4, 0.14, 0.26), lampHeadMat, lampArms.length);
       lampArms.forEach((m, i) => armInst.setMatrixAt(i, m));
       armInst.castShadow = false;
@@ -1800,16 +1853,10 @@ export class CrashArena implements CollisionWorld {
       g.add(armInst);
     }
 
-    // 3. 28 Stacked Shipping Containers (1 single InstancedMesh with per-instance colors!)
+    // 3. 28 Stacked Shipping Containers (1 single InstancedMesh with lightweight MeshLambertMaterial & per-instance colors!)
     if (this.containerBoxIndices.length > 0) {
       const contGeo = new BoxGeometry(2.5, 2.6, 12.2);
-      const contMat = new MeshStandardMaterial({
-        color: 0xffffff,
-        normalMap: concretePack.normalMap,
-        normalScale: new Vector2(0.35, 0.35),
-        metalness: 0.55,
-        roughness: 0.52,
-      });
+      const contMat = getCachedLambertMaterial({ color: 0xffffff });
       const contInst = new InstancedMesh(contGeo, contMat, this.containerBoxIndices.length);
       const colObj = new Color();
       this.tmpScale.set(1, 1, 1);
@@ -1832,7 +1879,7 @@ export class CrashArena implements CollisionWorld {
       g.add(contInst);
     }
 
-    // ---- Dynamic Batched InstancedMeshes (Machinery + Jersey + Guardrails + Cones = 5 draw calls!) ----
+    // ---- Dynamic Batched InstancedMeshes (Machinery + Jersey + Guardrails + Cones + Barrels + Blocks) ----
     // 1. Dynamic Hazard Heads (2 press heads + 4 pendulum hammer heads = 6 instances)
     this.dynHazardMachineryMesh = new InstancedMesh(new BoxGeometry(1, 1, 1), hazardMat, this.pressBoxIds.length + this.pendulums.length);
     this.dynHazardMachineryMesh.frustumCulled = false;
@@ -1840,7 +1887,7 @@ export class CrashArena implements CollisionWorld {
     g.add(this.dynHazardMachineryMesh);
 
     // 2. Dynamic Steel Pistons, Swing Arms & Crusher Rollers (4 + 4 + 3 = 11 instances)
-    const brightSteelMat = new MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.9, roughness: 0.24 });
+    const brightSteelMat = getCachedStandardMaterial({ color: 0xcbd5e1, metalness: 0.9, roughness: 0.24 });
     this.dynSteelMachineryMesh = new InstancedMesh(new CylinderGeometry(0.5, 0.5, 1.0, 18), brightSteelMat, this.pressBoxIds.length * 2 + this.pendulums.length + this.rollerCount);
     this.dynSteelMachineryMesh.frustumCulled = false;
     this.dynSteelMachineryMesh.castShadow = true;
@@ -1863,7 +1910,7 @@ export class CrashArena implements CollisionWorld {
     }
     if (this.dynGuardrailMap.length > 0) {
       const grGeo = guardrailGeometry(12.4);
-      const grMat = new MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.82, roughness: 0.34 });
+      const grMat = getCachedLambertMaterial({ color: 0x94a3b8 });
       this.dynGuardrailMesh = new InstancedMesh(grGeo, grMat, this.dynGuardrailMap.length);
       this.dynGuardrailMesh.frustumCulled = false;
       this.dynGuardrailMesh.castShadow = false;
@@ -1876,7 +1923,7 @@ export class CrashArena implements CollisionWorld {
       coneTex.colorSpace = SRGBColorSpace;
       this.dynConeMesh = new InstancedMesh(
         new ConeGeometry(0.22, 0.68, 12),
-        new MeshStandardMaterial({ map: coneTex, roughness: 0.55 }),
+        getCachedLambertMaterial({ map: coneTex }),
         this.dynCones.length,
       );
       this.dynConeMesh.frustumCulled = false;
@@ -1884,13 +1931,13 @@ export class CrashArena implements CollisionWorld {
       g.add(this.dynConeMesh);
     }
 
-    // 5. Dynamic Movable Crash Barrels (1 InstancedMesh draw call for all 48 drums)
+    // 5. Dynamic Movable Crash Barrels (1 InstancedMesh draw call)
     if (this.dynBarrels.length > 0) {
       const barrelTex = new CanvasTexture(makeBarrelStripeCanvas());
       barrelTex.colorSpace = SRGBColorSpace;
       this.dynBarrelMesh = new InstancedMesh(
         new CylinderGeometry(0.30, 0.30, 0.92, 14),
-        new MeshStandardMaterial({ map: barrelTex, roughness: 0.42, metalness: 0.35 }),
+        getCachedLambertMaterial({ map: barrelTex }),
         this.dynBarrels.length,
       );
       this.dynBarrelMesh.frustumCulled = false;
@@ -1898,13 +1945,13 @@ export class CrashArena implements CollisionWorld {
       g.add(this.dynBarrelMesh);
     }
 
-    // 6. Dynamic Knockable Crash-Test Checkerboard Blocks (1 InstancedMesh draw call for all 36 blocks)
+    // 6. Dynamic Knockable Crash-Test Checkerboard Blocks (1 InstancedMesh draw call)
     if (this.dynBlocks.length > 0) {
       const blockTex = new CanvasTexture(makeCrashBlockCanvas());
       blockTex.colorSpace = SRGBColorSpace;
       this.dynBlockMesh = new InstancedMesh(
         new BoxGeometry(0.76, 0.76, 0.76),
-        new MeshStandardMaterial({ map: blockTex, roughness: 0.50, metalness: 0.15 }),
+        getCachedLambertMaterial({ map: blockTex }),
         this.dynBlocks.length,
       );
       this.dynBlockMesh.frustumCulled = false;
