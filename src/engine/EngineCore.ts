@@ -838,14 +838,25 @@ export class EngineCore {
       return;
     }
 
-    // smooth spring chase camera
+    // Dynamic speed-sensitive FOV (62° at rest -> 78° at 200+ km/h) so 60 km/h genuinely feels like 60 km/h!
+    const spdKmh = this.vehicle.telemetry.speedKmh;
+    const speedRatio = Math.min(1, spdKmh / 200);
+    const targetFov = 62 + speedRatio * 16;
+    if (Math.abs(this.camera.fov - targetFov) > 0.06) {
+      this.camera.fov += (targetFov - this.camera.fov) * (1 - Math.exp(-6.5 * dt));
+      this.camera.updateProjectionMatrix();
+    }
+
+    // Closer, lower spring chase camera for authentic road speed sensation
+    const chaseDist = 4.85 + speedRatio * 0.55;
+    const chaseHeight = 1.58 + speedRatio * 0.14;
     const desired = Scratch.v1.set(
-      ox - Zx * 6.1,
-      Math.max(0.6, oy + 2.05),
-      oz - Zz * 6.1,
+      ox - Zx * chaseDist,
+      Math.max(0.55, oy + chaseHeight),
+      oz - Zz * chaseDist,
     );
-    const stiffness = 11;
-    const damping = 6.5;
+    const stiffness = 13;
+    const damping = 7.2;
     const ax = (desired.x - this.camPos.x) * stiffness - this.camVel.x * damping;
     const ay = (desired.y - this.camPos.y) * stiffness - this.camVel.y * damping;
     const az = (desired.z - this.camPos.z) * stiffness - this.camVel.z * damping;
@@ -856,7 +867,7 @@ export class EngineCore {
     this.camPos.y = Math.max(0.35, this.camPos.y + this.camVel.y * dt);
     this.camPos.z += this.camVel.z * dt;
 
-    const lk = 1 - Math.exp(-14 * dt);
+    const lk = 1 - Math.exp(-15 * dt);
     this.camLook.lerp(targetLook, lk);
     this.camera.position.copy(this.camPos);
     this.camera.lookAt(this.camLook);

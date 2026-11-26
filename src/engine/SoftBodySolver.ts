@@ -67,7 +67,7 @@ export interface ZoneParams {
  *  4. Outer Sheet-Metal (Fenders, Doors, Hood) + Hinges & Latches.
  */
 export const DEFAULT_ZONES: ZoneParams[] = [
-  /* 0: Cabin          */ { spring: 5.2e6, damp: 9800, plasticThreshold: 0.019, hardening: 0.50, breakStrain: 0 },
+  /* 0: Cabin          */ { spring: 4.9e6, damp: 9800, plasticThreshold: 0.015, hardening: 0.42, breakStrain: 0 },
   /* 1: Longeron       */ { spring: 3.5e6, damp: 8600, plasticThreshold: 0.015, hardening: 0.24, breakStrain: 0 },
   /* 2: Crumple        */ { spring: 1.75e6, damp: 7800, plasticThreshold: 0.0075, hardening: 0.09, breakStrain: 0 },
   /* 3: Fender         */ { spring: 4.8e5, damp: 2800, plasticThreshold: 0.0048, hardening: 0.07, breakStrain: 0 },
@@ -158,7 +158,7 @@ export class SoftBodySolver {
   minRatioBumper = 0.80;
   minRatioEngine = 0.88;
   maxRatio = 1.32;
-  airDamping = 0.02;
+  airDamping = 0.014;
   /** Per-substep velocity ceiling (~345 km/h) preventing numerical blowup on extreme crashes. */
   maxSubstepSpeed = 96.0;
   zones: ZoneParams[];
@@ -997,7 +997,7 @@ export class SoftBodySolver {
     this.cObstacle[i] = 1;
   }
 
-  /** Clamp post-contact normal velocity to -e * v_pre: zero rubbery rebound. */
+  /** Clamp post-contact normal velocity to -e * v_pre: heavy slam & scrape with zero rubbery rebound. */
   private applyRestitution(): void {
     const e = this.restitution;
     const { vx, vy, vz, cnx, cny, cnz, cvn, cHit, cObstacle } = this;
@@ -1012,7 +1012,13 @@ export class SoftBodySolver {
         const d = target - vn;
         vx[i] += nx * d; vy[i] += ny * d; vz[i] += nz * d;
       }
-      if (cObstacle[i] && -pre > impact) impact = -pre;
+      if (cObstacle[i]) {
+        if (-pre > impact) impact = -pre;
+      } else if (-pre > 4.8) {
+        // Heavy ground slam / rollover roof impact feeds metallic crunch sound, sparks & telemetry
+        const gImpact = (-pre - 1.2) * 1.15;
+        if (gImpact > impact) impact = gImpact;
+      }
     }
     this.lastImpact = impact;
     if (impact > this.peakImpact) this.peakImpact = impact;

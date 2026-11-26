@@ -374,10 +374,12 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       const by = P.beltY(z) - 0.03;
       const bw = P.sideHalfW(z, by) - 0.045;
       const lanes = new Array<number>(9).fill(-1);
+      // Front-heavy mass bias (~55% front / ~45% rear on front-engine cars) so nose naturally pitches forward during jumps & drops
+      const massBias = isMidRear ? (z < 0 ? 1.08 : 0.92) : (z > 0 ? 1.16 : 0.86);
       // Inner structural core (floor pan, central tunnel, longerons, and cabin roll-cage) -> DeformGroup.Body
-      lanes[0] = addNode(fw, fy, z, 20, NODE_BODY, zone);
-      lanes[1] = addNode(0, fy, z, 13, NODE_BODY, zone);
-      lanes[2] = addNode(-fw, fy, z, 20, NODE_BODY, zone);
+      lanes[0] = addNode(fw, fy, z, 20 * massBias, NODE_BODY, zone);
+      lanes[1] = addNode(0, fy, z, 13 * massBias, NODE_BODY, zone);
+      lanes[2] = addNode(-fw, fy, z, 20 * massBias, NODE_BODY, zone);
       // Outer side body panels (leftSide = SideL, rightSide = SideR) -> separated from inner roll-cage with lower plasticThreshold (Zone.Fender)
       lanes[3] = addNode(-mw, my, z, 7.5, DeformGroup.SideR, Zone.Fender, 0.085, 0.85);
       lanes[4] = addNode(-bw, by, z, 5.5, DeformGroup.SideR, Zone.Fender, 0.085, 0.85);
@@ -401,13 +403,14 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       const engY0 = P.floorY + 0.08;
       const engY1 = P.floorY + 0.44;
       const engHW = 0.26;
+      const engM = isMidRear ? 24 : 28;
       const engNodes = [
-        addNode(engHW, engY0, engZ0, 24, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
-        addNode(-engHW, engY0, engZ0, 24, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
-        addNode(0, engY1, engZ0, 22, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
-        addNode(engHW, engY0, engZ1, 24, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
-        addNode(-engHW, engY0, engZ1, 24, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
-        addNode(0, engY1, engZ1, 22, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
+        addNode(engHW, engY0, engZ0, engM, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
+        addNode(-engHW, engY0, engZ0, engM, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
+        addNode(0, engY1, engZ0, engM - 2, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
+        addNode(engHW, engY0, engZ1, engM, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
+        addNode(-engHW, engY0, engZ1, engM, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
+        addNode(0, engY1, engZ1, engM - 2, NODE_ENGINE, Zone.EngineSubframe, 0.09, 0.9),
       ];
       this.radiatorNode = stations[0][1];
       this.oilPanNodeA = engNodes[0];
@@ -1407,12 +1410,31 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       W.contact = true;
       groundedCount++;
       const sVel = (W.s - W.sPrev) / h;
-      const dampC = sVel < 0 ? this.damperBump : this.damperRebound;
+      const dampC = sVel < 0 ? this.damperBump * 1.18 : this.damperRebound * 1.25;
       let Fs = this.springK * (this.restLen - s) - dampC * sVel;
-      // Progressive rubber bump stop near full compression so hard jump landings never bottom out through the floor
-      if (s < this.sMin + 0.045) {
-        const bs = this.sMin + 0.045 - s;
-        Fs += 260000 * bs + 950000 * bs * bs * 18;
+      // Progressive heavy-duty bump stop + hard bottom-out impulse transfer into chassis/subframe (no trampoline bounce!)
+      if (s < this.sMin + 0.05) {
+        const bs = this.sMin + 0.05 - s;
+        // Heavily damped bump stop absorbs energy instead of launching the car back upward
+        const bumpDamp = sVel < 0 ? -sVel * 14500 : 0;
+        Fs += Math.min(85000, 145000 * bs + bumpDamp);
+        if (avy < -6.0) {
+          const excessV = Math.min(22, -avy - 6.0);
+          // Transfer excess vertical slam impulse directly into wheel arch / lower chassis / subframe soft-body nodes
+          const slamForce = excessV * massShare * 18.5;
+          if (W.hubNode >= 0) {
+            fy[W.hubNode] += slamForce * 0.55;
+            vy[W.hubNode] *= 0.82;
+          }
+          for (let k = 0; k < 4; k++) {
+            const ni = wn[k];
+            fy[ni] += slamForce * ww[k] * 0.45;
+          }
+          const slamDmg = Math.min(0.28, excessV * 0.012 * h * 60);
+          this.axleDmg[w] = Math.min(1, this.axleDmg[w] + slamDmg);
+          if (excessV + 6.0 > S.lastImpact) S.lastImpact = excessV + 6.0;
+          if (S.lastImpact > S.peakImpact) S.peakImpact = S.lastImpact;
+        }
       }
       if (Fs < 0) Fs = 0;
       if (w === 0) sFL = s; else if (w === 1) sFR = s; else if (w === 2) sRL = s; else sRR = s;
@@ -2389,13 +2411,13 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     fe.carVx = S.vx[ref0];
     fe.carVy = S.vy[ref0];
     fe.carVz = S.vz[ref0];
-    // Trigger high-G metallic sparks & collision dust burst at the active obstacle contact point
+    // Trigger high-G metallic sparks & collision dust burst at active obstacle OR heavy ground/roof slam contact points
     if (this.impactFxCooldown > 0) this.impactFxCooldown -= frameDt;
-    if (S.lastImpact > 6.5 && this.impactFxCooldown <= 0) {
+    if (S.lastImpact > 5.8 && this.impactFxCooldown <= 0) {
       let sx = ox, sy = oy, sz = oz;
       let hitCount = 0;
       for (let i = 0; i < S.nodeCount; i++) {
-        if (!S.cObstacle[i]) continue;
+        if (!S.cObstacle[i] && !S.cHit[i]) continue;
         if (hitCount === 0) { sx = 0; sy = 0; sz = 0; }
         sx += W[i * 3];
         sy += W[i * 3 + 1];
@@ -2406,7 +2428,7 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         const inv = 1 / hitCount;
         sx *= inv; sy *= inv; sz *= inv;
       }
-      this.fluids.emitImpactBurst(sx, sy, sz, Math.min(1.5, S.lastImpact / 18));
+      this.fluids.emitImpactBurst(sx, sy, sz, Math.min(1.5, S.lastImpact / 16));
       this.impactFxCooldown = 0.14;
     }
 

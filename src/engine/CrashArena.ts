@@ -175,6 +175,14 @@ export class CrashArena implements CollisionWorld {
     // Zone 5: Urban / Light Industrial District (Southeast)
     { num: 15, id: 'roundabout', label: '15. Drift Roundabout & Guardrails', markerX: 380, markerZ: -220, spawnX: 255, spawnZ: -206, teleportX: 310, teleportZ: -206, yaw: Math.PI / 2, defaultSpeedKmh: 105, category: 'crash' },
     { num: 16, id: 'industrial', label: '16. Drive-Through Hangars & Containers', markerX: 390, markerZ: -380, spawnX: 260, spawnZ: -285, teleportX: 395, teleportZ: -310, yaw: Math.PI, defaultSpeedKmh: 125, category: 'crash' },
+
+    // Zone 6: Extended Extreme Crash-Test Stations (#17 – #22)
+    { num: 17, id: 'steel-wedge', label: '17. Steel V-Wedge Splitter', markerX: 92, markerZ: 260, spawnX: 92, spawnZ: 150, teleportX: 92, teleportZ: 195, yaw: 0, defaultSpeedKmh: 130, category: 'crash' },
+    { num: 18, id: 'bridge-drop', label: '18. High-Speed Jump Wall Slam', markerX: -95, markerZ: 175, spawnX: -95, spawnZ: 55, teleportX: -95, teleportZ: 100, yaw: 0, defaultSpeedKmh: 120, category: 'crash' },
+    { num: 19, id: 'bollard-corridor', label: '19. Staggered Steel Bollard Gauntlet', markerX: 112, markerZ: 220, spawnX: 112, spawnZ: 130, teleportX: 112, teleportZ: 165, yaw: 0, defaultSpeedKmh: 110, category: 'crash' },
+    { num: 20, id: 'ramp-wall-east', label: '20. Airborne Ramp-to-Wall Slam', markerX: 46, markerZ: 108, spawnX: 46, spawnZ: -25, teleportX: 46, teleportZ: 15, yaw: 0, defaultSpeedKmh: 125, category: 'crash' },
+    { num: 21, id: 'cliff-drop', label: '21. Heavy Cliff Drop & Suspension Slam', markerX: -125, markerZ: -355, spawnX: -125, spawnZ: -245, teleportX: -125, teleportZ: -285, yaw: Math.PI, defaultSpeedKmh: 110, category: 'suspension' },
+    { num: 22, id: 'demolition-gauntlet', label: '22. Demolition Blocks & Ramp Gauntlet', markerX: -46, markerZ: 74, spawnX: -46, spawnZ: -30, teleportX: -46, teleportZ: 15, yaw: 0, defaultSpeedKmh: 135, category: 'crash' },
   ];
 
   private boxList: number[][] = [];
@@ -201,14 +209,16 @@ export class CrashArena implements CollisionWorld {
   private readonly dynBarriers: DynamicBarrier[] = [];
   private readonly dynCones: DynamicCone[] = [];
   private readonly dynBarrels: DynamicBarrel[] = [];
+  private readonly dynBlocks: DynamicBarrel[] = [];
 
-  // Batched dynamic InstancedMeshes (all animated obstacles in just 6 draw calls!)
+  // Batched dynamic InstancedMeshes (all animated obstacles in just 7 draw calls!)
   private dynJerseyMesh: InstancedMesh | null = null;
   private dynJerseyMap: number[] = [];
   private dynGuardrailMesh: InstancedMesh | null = null;
   private dynGuardrailMap: number[] = [];
   private dynConeMesh: InstancedMesh | null = null;
   private dynBarrelMesh: InstancedMesh | null = null;
+  private dynBlockMesh: InstancedMesh | null = null;
   private dynHazardMachineryMesh: InstancedMesh | null = null; // 2 press heads + 4 pendulum heads
   private dynSteelMachineryMesh: InstancedMesh | null = null;  // 4 press pistons + 4 pendulum arms + 3 crusher rollers
   private rollerSpin = 0;
@@ -509,67 +519,9 @@ export class CrashArena implements CollisionWorld {
     this.patches.push({ x0: 52, x1: 112, z0: -120, z1: -40, mu: 0.15, color: 0xcbd5e1, rough: 0.08, name: 'Ice' });
 
     // ================================================================
-    // EXTRA INTERACTIVE CRASH-TEST PROPS & MOVABLE BARRELS / CONES
-    // (All batched into merged static meshes or InstancedMesh for 60 FPS mobile)
+    // CLEAN INTERACTIVE CRASH PROPS (Focused at test zones — open central runway!)
     // ================================================================
-    // 1. Central-Zone Jump Kickers (immediately reachable from spawn)
-    this.ramps.push({ x: 14, z: 32, yaw: 0, len: 9.0, w: 5.2, h: 1.75 });
-    this.ramps.push({ x: -14, z: 32, yaw: 0, len: 9.0, w: 5.2, h: 1.75 });
-    this.ramps.push({ x: 14, z: -48, yaw: Math.PI, len: 9.5, w: 5.2, h: 1.95 });
-    this.ramps.push({ x: -14, z: -48, yaw: Math.PI, len: 9.5, w: 5.2, h: 1.95 });
-
-    // 2. High-Speed Speed Bumps along side test lanes
-    for (let i = 0; i < 4; i++) {
-      const bz = -18 + i * 11;
-      this.bumps.push({ x0: -26, x1: -14, z0: bz, z1: bz + 1.1, h: 0.20, kind: 'sine', color: 0xf59e0b });
-      this.bumps.push({ x0: 14, x1: 26, z0: bz, z1: bz + 1.1, h: 0.20, kind: 'sine', color: 0xf59e0b });
-    }
-
-    // 3. Staggered Steel Crash Pillars (Side-Impact & Slalom Gauntlet)
-    const extraPillars: [number, number][] = [
-      [28, -22], [35, -10], [28, 2], [35, 14],
-      [-28, -22], [-35, -10], [-28, 2], [-35, 14],
-    ];
-    for (const [px, pz] of extraPillars) {
-      this.addCyl(px, pz, 0.30, 0, 2.8, 0.48);
-    }
-
-    // 4. Knockable Concrete Jersey Barriers & Highway Guardrails near central proving lanes
-    const extraJerseys: [number, number, number][] = [
-      [11, 58, 0.12], [11, 61.5, 0.12], [11, 65, 0.12],
-      [-11, 58, -0.12], [-11, 61.5, -0.12], [-11, 65, -0.12],
-      [20, 88, Math.PI / 2], [23.5, 88, Math.PI / 2],
-      [-20, 88, Math.PI / 2], [-23.5, 88, Math.PI / 2],
-    ];
-    for (const [jx, jz, jyaw] of extraJerseys) {
-      const boxIndex = this.boxList.length;
-      this.dynamicBoxIndices.add(boxIndex);
-      this.addBox(jx, 0.45, jz, 0.34, 0.45, 1.35, jyaw, 0.65);
-      this.dynBarriers.push({
-        boxIndex, x0: jx, z0: jz, yaw0: jyaw,
-        x: jx, z: jz, yaw: jyaw,
-        vx: 0, vz: 0, omega: 0, tilt: 0, vTilt: 0,
-        hx: 0.34, hy: 0.45, hz: 1.35, guardrail: false,
-      });
-    }
-
-    const extraGuardrails: [number, number, number][] = [
-      [18.5, 18, 0], [-18.5, 18, 0],
-      [18.5, -24, 0], [-18.5, -24, 0],
-    ];
-    for (const [gx, gz, gyaw] of extraGuardrails) {
-      const boxIndex = this.boxList.length;
-      this.dynamicBoxIndices.add(boxIndex);
-      this.addBox(gx, 0.46, gz, 0.22, 0.46, 6.2, gyaw, 0.50);
-      this.dynBarriers.push({
-        boxIndex, x0: gx, z0: gz, yaw0: gyaw,
-        x: gx, z: gz, yaw: gyaw,
-        vx: 0, vz: 0, omega: 0, tilt: 0, vTilt: 0,
-        hx: 0.22, hy: 0.46, hz: 6.2, guardrail: true,
-      });
-    }
-
-    // 5. Movable Physics Crash Barrels (48 smashable drums in pyramids & clusters)
+    // Movable Physics Crash Barrels (18 drums at test zones only)
     const addBarrelCluster = (cx: number, cz: number, rows: number) => {
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c <= r; c++) {
@@ -582,24 +534,57 @@ export class CrashArena implements CollisionWorld {
         }
       }
     };
-    addBarrelCluster(6.5, 22, 3);    // 6 barrels right of runway
-    addBarrelCluster(-6.5, 22, 3);   // 6 barrels left of runway
-    addBarrelCluster(14, 48, 3);     // 6 barrels landing zone of east kicker
-    addBarrelCluster(-14, 48, 3);    // 6 barrels landing zone of west kicker
-    addBarrelCluster(0, -32, 3);     // 6 barrels south of spawn
-    addBarrelCluster(380, -182, 3);  // 6 barrels drift roundabout north
-    addBarrelCluster(342, -220, 3);  // 6 barrels drift roundabout west
+    addBarrelCluster(380, -182, 3);  // 6 barrels drift roundabout
     addBarrelCluster(395, -335, 3);  // 6 barrels industrial yard
+    addBarrelCluster(-46, 66, 3);    // 6 barrels at Station #22 demolition gauntlet
 
-    // 6. Extra Slalom Traffic Cones along main proving corridor
-    for (let i = 0; i < 12; i++) {
-      const cz = -12 + i * 7.5;
-      const side = (i & 1) === 0 ? 7.2 : -7.2;
-      this.dynCones.push({
-        x0: side, z0: cz, x: side, y: 0, z: cz,
-        vx: 0, vy: 0, vz: 0, tiltX: 0, tiltZ: 0, vTiltX: 0, vTiltZ: 0,
-      });
+    // High-Speed Launch Ramps & Angled Concrete Walls for Stations #20 & #22
+    this.ramps.push({ x: 46, z: 45, yaw: 0, len: 13.5, w: 6.2, h: 3.1 });
+    this.ramps.push({ x: -46, z: 45, yaw: 0, len: 13.5, w: 6.2, h: 3.1 });
+    this.addBox(46, 1.1, 108, 4.2, 1.1, 0.85, 0.35, 0.72);
+    this.addBox(-46, 1.1, 108, 4.2, 1.1, 0.85, -0.35, 0.72);
+
+    // 16 Knockable Crash-Test Checkerboard Blocks (placed strictly at Stations #20 & #22)
+    const addBlockWall = (cx: number, cz: number, cols: number, rows: number) => {
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const bx = cx + (c - (cols - 1) * 0.5) * 0.92;
+          const bz = cz + r * 0.92;
+          this.dynBlocks.push({
+            x0: bx, z0: bz, x: bx, y: 0, z: bz,
+            vx: 0, vy: 0, vz: 0, tiltX: 0, tiltZ: 0, vTiltX: 0, vTiltZ: 0,
+          });
+        }
+      }
+    };
+    addBlockWall(46, 74, 4, 2);      // 8 blocks at Station #20
+    addBlockWall(-46, 74, 4, 2);     // 8 blocks at Station #22
+
+    // 8. Extended Extreme Crash-Test Stations (#17 – #21)
+    // Station #17: Razor-Sharp Steel V-Wedge Splitter at (92, 260)
+    const wedgeL = this.boxList.length;
+    this.steelBoxIndices.add(wedgeL);
+    this.addBox(91.0, 1.15, 261.8, 0.35, 1.15, 2.4, -0.44, 0.45);
+    const wedgeR = this.boxList.length;
+    this.steelBoxIndices.add(wedgeR);
+    this.addBox(93.0, 1.15, 261.8, 0.35, 1.15, 2.4, 0.44, 0.45);
+    this.addCyl(92.0, 259.6, 0.22, 0, 2.3, 0.4); // sharp steel nose pillar
+
+    // Station #18: High-Speed Jump Ramp launching straight into a 5.5m Concrete Wall at (-95, 175)
+    this.ramps.push({ x: -95, z: 132, yaw: 0, len: 16.0, w: 6.4, h: 3.6 });
+    this.addBox(-95, 2.8, 175, 5.2, 2.8, 1.1, 0, 0.72);
+
+    // Station #19: Staggered High-Strength Steel Bollard & Pillar Corridor at (112, 180..240)
+    for (let i = 0; i < 8; i++) {
+      const bz = 182 + i * 7.5;
+      const offset = (i & 1) === 0 ? -1.45 : 1.45;
+      this.addCyl(112 + offset, bz, 0.24, 0, 2.4, 0.48);
     }
+    this.addBox(112, 1.2, 248, 4.4, 1.2, 0.9, 0, 0.72); // end stop wall
+
+    // Station #21: Heavy Cliff Drop & Suspension Bottom-Out Slam at (-125, -310 -> -365)
+    this.ramps.push({ x: -125, z: -315, yaw: Math.PI, len: 22.0, w: 7.4, h: 5.4 });
+    this.addBox(-125, 1.3, -395, 6.0, 1.3, 1.0, 0, 0.72); // catch wall after hard drop
 
     // ================================================================
     // 2,000 m × 2,000 m PERIMETER BOUNDARY WALLS
@@ -733,7 +718,13 @@ export class CrashArena implements CollisionWorld {
       b.vx = 0; b.vy = 0; b.vz = 0;
       b.tiltX = 0; b.tiltZ = 0; b.vTiltX = 0; b.vTiltZ = 0;
     }
-    this.syncDynamicVisuals(true, true, true);
+    for (let i = 0; i < this.dynBlocks.length; i++) {
+      const b = this.dynBlocks[i];
+      b.x = b.x0; b.y = 0; b.z = b.z0;
+      b.vx = 0; b.vy = 0; b.vz = 0;
+      b.tiltX = 0; b.tiltZ = 0; b.vTiltX = 0; b.vTiltZ = 0;
+    }
+    this.syncDynamicVisuals(true, true, true, true);
   }
 
   private syncBarrierBox(b: DynamicBarrier): void {
@@ -961,8 +952,49 @@ export class CrashArena implements CollisionWorld {
       }
     }
 
-    if (barriersDirty || conesDirty || barrelsDirty) {
-      this.syncDynamicVisuals(barriersDirty, conesDirty, barrelsDirty);
+    // 5. Knockable Crash-Test Checkerboard Blocks (zero-GC scatter & tumble)
+    let blocksDirty = false;
+    for (let i = 0; i < this.dynBlocks.length; i++) {
+      const b = this.dynBlocks[i];
+      const bdx = b.x - carX, bdz = b.z - carZ;
+      if (bdx * bdx + bdz * bdz < 22 * 22) {
+        for (let n = 0; n < nCount; n += 2) {
+          if (py[n] > 1.15) continue;
+          const dx = b.x - px[n], dz = b.z - pz[n];
+          const d2 = dx * dx + dz * dz;
+          if (d2 < 0.78 * 0.78 && d2 > 1e-4) {
+            const invD = 1 / Math.sqrt(d2);
+            const nx = dx * invD, nz = dz * invD;
+            const spd = Math.sqrt(vx[n] * vx[n] + vz[n] * vz[n]);
+            const kick = Math.max(2.4, Math.min(15.0, spd * 0.72));
+            b.vx = nx * kick + vx[n] * 0.28;
+            b.vz = nz * kick + vz[n] * 0.28;
+            b.vy = Math.max(b.vy, Math.min(4.8, kick * 0.28));
+            b.vTiltX += nz * kick * 1.1;
+            b.vTiltZ -= nx * kick * 1.1;
+            break;
+          }
+        }
+      }
+      if (b.y > 0 || Math.abs(b.vx) > 0.01 || Math.abs(b.vy) > 0.01 || Math.abs(b.vz) > 0.01 || Math.abs(b.vTiltX) > 0.01 || Math.abs(b.vTiltZ) > 0.01) {
+        b.vy -= 9.81 * dt;
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        b.z += b.vz * dt;
+        if (b.y < 0) {
+          b.y = 0;
+          b.vy = Math.abs(b.vy) > 0.65 ? -b.vy * 0.30 : 0;
+          const gDrag = Math.exp(-4.2 * dt);
+          b.vx *= gDrag; b.vz *= gDrag; b.vTiltX *= gDrag; b.vTiltZ *= gDrag;
+        }
+        b.tiltX = Math.max(-1.57, Math.min(1.57, b.tiltX + b.vTiltX * dt));
+        b.tiltZ = Math.max(-1.57, Math.min(1.57, b.tiltZ + b.vTiltZ * dt));
+        blocksDirty = true;
+      }
+    }
+
+    if (barriersDirty || conesDirty || barrelsDirty || blocksDirty) {
+      this.syncDynamicVisuals(barriersDirty, conesDirty, barrelsDirty, blocksDirty);
     }
   }
 
@@ -1036,7 +1068,7 @@ export class CrashArena implements CollisionWorld {
     }
   }
 
-  private syncDynamicVisuals(updateBarriers = true, updateCones = true, updateBarrels = true): void {
+  private syncDynamicVisuals(updateBarriers = true, updateCones = true, updateBarrels = true, updateBlocks = true): void {
     if (updateBarriers) {
       if (this.dynJerseyMesh) {
         for (let k = 0; k < this.dynJerseyMap.length; k++) {
@@ -1088,6 +1120,18 @@ export class CrashArena implements CollisionWorld {
         this.dynBarrelMesh.setMatrixAt(i, this.tmpMat);
       }
       this.dynBarrelMesh.instanceMatrix.needsUpdate = true;
+    }
+    if (updateBlocks && this.dynBlockMesh) {
+      this.tmpScale.set(1, 1, 1);
+      for (let i = 0; i < this.dynBlocks.length; i++) {
+        const b = this.dynBlocks[i];
+        this.tmpPos.set(b.x, b.y + 0.38, b.z);
+        this.tmpEuler.set(b.tiltX, 0, b.tiltZ, 'XYZ');
+        this.tmpQuat.setFromEuler(this.tmpEuler);
+        this.tmpMat.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
+        this.dynBlockMesh.setMatrixAt(i, this.tmpMat);
+      }
+      this.dynBlockMesh.instanceMatrix.needsUpdate = true;
     }
   }
 
@@ -1853,7 +1897,21 @@ export class CrashArena implements CollisionWorld {
       this.dynBarrelMesh.castShadow = false;
       g.add(this.dynBarrelMesh);
     }
-    this.syncDynamicVisuals(true, true, true);
+
+    // 6. Dynamic Knockable Crash-Test Checkerboard Blocks (1 InstancedMesh draw call for all 36 blocks)
+    if (this.dynBlocks.length > 0) {
+      const blockTex = new CanvasTexture(makeCrashBlockCanvas());
+      blockTex.colorSpace = SRGBColorSpace;
+      this.dynBlockMesh = new InstancedMesh(
+        new BoxGeometry(0.76, 0.76, 0.76),
+        new MeshStandardMaterial({ map: blockTex, roughness: 0.50, metalness: 0.15 }),
+        this.dynBlocks.length,
+      );
+      this.dynBlockMesh.frustumCulled = false;
+      this.dynBlockMesh.castShadow = false;
+      g.add(this.dynBlockMesh);
+    }
+    this.syncDynamicVisuals(true, true, true, true);
 
     // ---- Underground Pure-White Studio Showroom (y = -90) ----
     const studioWallMat = new MeshBasicMaterial({ color: 0xf8fafc, side: BackSide, toneMapped: false });
@@ -2060,6 +2118,21 @@ function makeBarrelStripeCanvas(): HTMLCanvasElement {
   ctx.fillStyle = '#1e293b';
   ctx.fillRect(0, 0, 64, 5);
   ctx.fillRect(0, 59, 64, 5);
+  return c;
+}
+
+function makeCrashBlockCanvas(): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#f59e0b';
+  ctx.fillRect(0, 0, 64, 64);
+  ctx.fillStyle = '#111827';
+  ctx.fillRect(0, 0, 32, 32);
+  ctx.fillRect(32, 32, 32, 32);
+  ctx.strokeStyle = '#fbbf24';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, 60, 60);
   return c;
 }
 

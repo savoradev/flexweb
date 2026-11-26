@@ -34,66 +34,63 @@ interface EngineAcousticProfile {
 }
 
 const PROFILES: Record<EngineSoundProfileId, EngineAcousticProfile> = {
-  // BMW M4 CSL — S58 3.0L Inline-6 Bi-Turbo:
-  // Deep, bassy, throaty, raspy low/mid-range growl (strong sub + 1.5x + 3.0x I6 firing orders),
-  // capped lowpass so it NEVER sounds high-pitched or synthetic, plus sharp dry pops & bangs on lift.
+  // BMW M4 CSL — S58 3.0L Inline-6:
+  // Deep, bassy, throaty low/mid-range growl with ZERO turbo whine, capped lowpass so it stays deep & loud above 5K RPM.
   bmw_s58: {
     id: 'bmw_s58',
     redlineRpm: 7200,
-    orders: [0.75, 1.5, 3.0, 4.5],
-    mix: [0.42, 0.56, 0.36, 0.14],
+    orders: [0.5, 1.0, 2.0, 3.0],
+    mix: [0.52, 0.64, 0.34, 0.10],
     waves: ['triangle', 'sawtooth', 'triangle', 'sawtooth'],
-    lpMin: 175,
-    lpMax: 1550,
-    peakFreq: 145,
-    peakQ: 2.0,
-    peakGainDb: 8.5,
-    forcedMinHz: 1700,
-    forcedMaxHz: 4600,
-    forcedGain: 0.024,
+    lpMin: 150,
+    lpMax: 780,
+    peakFreq: 112,
+    peakQ: 2.1,
+    peakGainDb: 10.5,
+    forcedMinHz: 0,
+    forcedMaxHz: 0,
+    forcedGain: 0.0,
     isSupercharger: false,
     hybridGain: 0.0,
     popsIntensity: 1.0,
-    bovIntensity: 0.22,
-    driveGain: 1.75,
+    bovIntensity: 0.0,
+    driveGain: 1.95,
   },
-  // McLaren P1 — M838TQ 3.8L Flat-Plane-Crank Twin-Turbo V8 + IPAS Hybrid:
-  // Sharp, nervous mechanical flat-plane V8 up to 8500 RPM, prominent twin-turbo spool,
-  // crisp BOV "pschitt" on gear shifts, and subtle IPAS hybrid electric whine.
+  // McLaren P1 — M838TQ 3.8L V8 + IPAS Hybrid:
+  // Muscular V8 growl with controlled top-end so it never becomes shrill above 5K RPM.
   mclaren_p1: {
     id: 'mclaren_p1',
     redlineRpm: 8500,
-    orders: [1.5, 3.0, 6.0, 9.0],
-    mix: [0.24, 0.52, 0.36, 0.18],
-    waves: ['sawtooth', 'sawtooth', 'triangle', 'sawtooth'],
-    lpMin: 320,
-    lpMax: 3400,
-    peakFreq: 420,
-    peakQ: 2.4,
-    peakGainDb: 7.0,
-    forcedMinHz: 2200,
-    forcedMaxHz: 6800,
-    forcedGain: 0.072,
+    orders: [0.75, 1.5, 3.0, 4.5],
+    mix: [0.36, 0.58, 0.32, 0.12],
+    waves: ['triangle', 'sawtooth', 'triangle', 'sawtooth'],
+    lpMin: 220,
+    lpMax: 1350,
+    peakFreq: 210,
+    peakQ: 2.0,
+    peakGainDb: 8.5,
+    forcedMinHz: 1800,
+    forcedMaxHz: 4800,
+    forcedGain: 0.048,
     isSupercharger: false,
-    hybridGain: 0.032,
+    hybridGain: 0.02,
     popsIntensity: 0.45,
-    bovIntensity: 1.0,
-    driveGain: 1.8,
+    bovIntensity: 0.85,
+    driveGain: 1.85,
   },
   // Dodge Challenger SRT Demon — 6.2L Supercharged HEMI V8:
-  // Heavy, thunderous low-end American cross-plane V8 rumble + unmistakable
-  // belt-driven high-pitched supercharger whine rising linearly with RPM & throttle!
+  // Thunderous deep American V8 rumble + realistic belt-driven supercharger whine.
   dodge_demon: {
     id: 'dodge_demon',
     redlineRpm: 6500,
-    orders: [0.5, 1.0, 2.0, 4.0],
-    mix: [0.48, 0.62, 0.38, 0.16],
+    orders: [0.5, 1.0, 2.0, 3.0],
+    mix: [0.56, 0.68, 0.36, 0.12],
     waves: ['triangle', 'sawtooth', 'sawtooth', 'triangle'],
-    lpMin: 150,
-    lpMax: 1380,
-    peakFreq: 98,
+    lpMin: 135,
+    lpMax: 740,
+    peakFreq: 92,
     peakQ: 1.9,
-    peakGainDb: 9.5,
+    peakGainDb: 11.0,
     forcedMinHz: 780,
     forcedMaxHz: 3950,
     forcedGain: 0.115,
@@ -101,28 +98,28 @@ const PROFILES: Record<EngineSoundProfileId, EngineAcousticProfile> = {
     hybridGain: 0.0,
     popsIntensity: 0.65,
     bovIntensity: 0.15,
-    driveGain: 1.95,
+    driveGain: 2.05,
   },
   // Built-in GT-S — Cross-Plane V8
   gts_v8: {
     id: 'gts_v8',
     redlineRpm: 7200,
-    orders: [0.75, 1.5, 3.0, 5.0],
-    mix: [0.36, 0.52, 0.30, 0.14],
+    orders: [0.5, 1.0, 2.0, 3.0],
+    mix: [0.46, 0.58, 0.30, 0.10],
     waves: ['triangle', 'sawtooth', 'sawtooth', 'triangle'],
-    lpMin: 210,
-    lpMax: 1950,
-    peakFreq: 155,
+    lpMin: 165,
+    lpMax: 920,
+    peakFreq: 125,
     peakQ: 2.0,
-    peakGainDb: 6.0,
-    forcedMinHz: 1650,
-    forcedMaxHz: 4400,
-    forcedGain: 0.02,
+    peakGainDb: 8.5,
+    forcedMinHz: 0,
+    forcedMaxHz: 0,
+    forcedGain: 0.0,
     isSupercharger: false,
     hybridGain: 0.0,
     popsIntensity: 0.55,
-    bovIntensity: 0.2,
-    driveGain: 1.45,
+    bovIntensity: 0.0,
+    driveGain: 1.65,
   },
 };
 
@@ -520,21 +517,23 @@ export class SoundEngine {
     const rpmNorm = Math.max(0, Math.min(1, (rpm - 800) / (P.redlineRpm - 800)));
     const throttle = tel.throttle;
     const pitchScale = Math.max(0.35, Math.min(1.0, timeScale));
-    const crankHz = (rpm / 60) * pitchScale;
+    // Soft-compress pitch above 4,500 RPM so high revs stay deep, bassy & realistic while growing much louder & throatier
+    const effectiveRpm = rpm <= 4500 ? rpm : 4500 + (rpm - 4500) * 0.38;
+    const crankHz = (effectiveRpm / 60) * pitchScale;
 
     // 1. Update 4 combustion harmonic oscillators with smooth 30ms time constant
     for (let i = 0; i < 4; i++) {
       const f = Math.max(22, crankHz * P.orders[i]);
       this.oscs[i].frequency.setTargetAtTime(f, t, 0.03);
     }
-    const topHarmonic = P.mix[3] * (0.55 + rpmNorm * 0.95 + throttle * 0.35);
+    const topHarmonic = P.mix[3] * (0.45 + rpmNorm * 0.45 + throttle * 0.25);
     this.oscGains[3].gain.setTargetAtTime(topHarmonic, t, 0.03);
 
-    // Exhaust lowpass filter opens smoothly with RPM & throttle load
-    const lpCutoff = P.lpMin + (P.lpMax - P.lpMin) * Math.pow(rpmNorm, 0.9) * (0.52 + 0.48 * throttle);
+    // Exhaust lowpass filter opens smoothly without getting shrill, while drive & volume roar louder at high RPM
+    const lpCutoff = P.lpMin + (P.lpMax - P.lpMin) * Math.pow(rpmNorm, 0.78) * (0.58 + 0.42 * throttle);
     this.exhaustLowpass?.frequency.setTargetAtTime(lpCutoff, t, 0.03);
-    this.engineDriveGain?.gain.setTargetAtTime(P.driveGain * (0.76 + 0.52 * throttle + 0.22 * rpmNorm), t, 0.03);
-    this.engineOutGain?.gain.setTargetAtTime(0.24 + 0.16 * throttle + 0.10 * rpmNorm, t, 0.03);
+    this.engineDriveGain?.gain.setTargetAtTime(P.driveGain * (0.78 + 0.62 * throttle + 0.48 * rpmNorm), t, 0.03);
+    this.engineOutGain?.gain.setTargetAtTime(0.24 + 0.22 * throttle + 0.22 * rpmNorm, t, 0.03);
 
     // 2. Forced Induction: realistic 2.7L Twin-Screw Supercharger (Dodge Demon) OR Twin-Turbo spool (BMW / McLaren)
     if (this.forcedOsc && this.forcedGain) {
