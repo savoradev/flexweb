@@ -1583,7 +1583,7 @@ export class EngineCore {
       if (this.overheadMapMode) {
         const panScale = this.mapZoomY * 0.0014;
         this.mapPanX = Math.max(-1000, Math.min(1000, this.mapPanX + dx * panScale));
-        this.mapPanZ = Math.max(-1000, Math.min(1000, this.mapPanZ - dy * panScale));
+        this.mapPanZ = Math.max(-1000, Math.min(1000, this.mapPanZ + dy * panScale));
         return;
       }
       this.orbitYaw -= dx * 0.007;
