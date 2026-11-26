@@ -10,6 +10,7 @@ type SettingsTab = 'general' | 'controls' | 'sounds' | 'graphics';
 
 interface SettingsModalProps {
   settings: SimulatorSettings;
+  deviceLabel?: string;
   onChange: (next: SimulatorSettings) => void;
   onResetDefaults: () => void;
   onClose: () => void;
@@ -17,6 +18,7 @@ interface SettingsModalProps {
 
 export function SettingsModal({
   settings,
+  deviceLabel,
   onChange,
   onResetDefaults,
   onClose,
@@ -33,7 +35,10 @@ export function SettingsModal({
         <div className="bng-modal-header">
           <div>
             <span className="bng-eyebrow">CONFIGURATION</span>
-            <h2 className="bng-modal-title">Settings</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <h2 className="bng-modal-title">Settings</h2>
+              {deviceLabel && <span className="device-badge">{deviceLabel}</span>}
+            </div>
           </div>
           <div className="bng-header-actions">
             <button type="button" className="btn btn-menu" onClick={onResetDefaults}>

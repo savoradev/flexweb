@@ -52,12 +52,19 @@ export const DEFAULT_SETTINGS: SimulatorSettings = {
 
 const STORAGE_KEY = 'flexweb_sim_settings_v1';
 
+import { detectDeviceProfile } from '../utils/DeviceDetector';
+
 export function loadSimulatorSettings(): SimulatorSettings {
+  const { deviceType } = detectDeviceProfile();
+  const deviceDefault: SimulatorSettings =
+    deviceType === 'phone'
+      ? { ...DEFAULT_SETTINGS, resolutionMode: 'low', shadowQuality: 'low', reflectionQuality: 'low' }
+      : { ...DEFAULT_SETTINGS };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_SETTINGS };
+    if (!raw) return deviceDefault;
     const parsed = JSON.parse(raw) as Partial<SimulatorSettings> & { resolutionMode?: string };
-    const merged = { ...DEFAULT_SETTINGS, ...parsed } as SimulatorSettings;
+    const merged = { ...deviceDefault, ...parsed } as SimulatorSettings;
     if (merged.drawDistance < 2200) merged.drawDistance = 3500;
     const rm = String(parsed.resolutionMode ?? '');
     if (rm === 'performance') merged.resolutionMode = 'low';
@@ -65,7 +72,7 @@ export function loadSimulatorSettings(): SimulatorSettings {
     else if (rm === 'quality') merged.resolutionMode = 'high';
     return merged;
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return deviceDefault;
   }
 }
 

@@ -468,9 +468,9 @@ export class EngineCore {
     this.arena.updateRadarDisplay(FNow[0], FNow[2], liveTel.speedKmh);
     this.sound.update(liveTel, frameDt, this.loop.paused || this.menuDemoMode, this.loop.timeScale);
 
-    // Throttled 15 Hz direct DOM HUD update (speed, gear, RPM, G-force, FPS — zero React reconciliation!)
+    // Throttled 10 Hz direct DOM HUD update (speed, gear, RPM, G-force, FPS — zero React reconciliation!)
     this.hudTimer += frameDt;
-    if (this.onHudFrame && this.hudTimer >= 0.066) {
+    if (this.onHudFrame && this.hudTimer >= 0.10) {
       this.hudTimer = 0;
       this.onHudFrame(liveTel, this.loop.fps);
     }
@@ -661,8 +661,9 @@ export class EngineCore {
     // 2. Sounds volumes & mute
     this.sound.setVolumes(s.masterVolume, s.engineVolume, s.effectsVolume, s.muted);
 
-    // 3. Graphics: Shadows (lightweight projected contact blob shadow on mobile phones; throttled shadowMap on tablets/desktop)
-    if (s.shadowQuality === 'off' || (this.isMobilePhone && s.shadowQuality === 'low')) {
+    // 3. Graphics: Shadows (Low Settings & Mobile Phones disable real-time shadow maps completely and use a single lightweight contact shadow plane)
+    const isLowPerf = s.resolutionMode === 'low' || this.isMobilePhone;
+    if (s.shadowQuality === 'off' || s.resolutionMode === 'low' || (this.isMobilePhone && s.shadowQuality === 'low')) {
       this.renderer.shadowMap.enabled = false;
       this.dirLight.castShadow = false;
       this.ensureBlobShadow(s.shadowQuality !== 'off');
@@ -680,7 +681,11 @@ export class EngineCore {
       this.renderer.shadowMap.needsUpdate = true;
     }
 
-    // 4. Graphics: Real-time Reflections
+    // 4. Physics substeps & normal throttling for Low Settings / Mobile Mode (4 substeps @ 1/60s = 2x faster CPU!)
+    this.vehicle.solver.substeps = isLowPerf ? 4 : this.constrained ? 8 : 12;
+    this.vehicle.deformer.lowQualityNormals = isLowPerf;
+
+    // 5. Graphics: Real-time Reflections
     this.reflectionQuality = s.reflectionQuality;
     if (s.reflectionQuality === 'off') {
       this.scene.environment = null;
@@ -688,7 +693,7 @@ export class EngineCore {
       this.scene.environment = (this.envRT ?? this.studioEnvRT).texture;
     }
 
-    // 5. Graphics: Pixel Quality (Low / Medium / High / Ultra; Medium caps 1.0 phone / 1.25 tablet / 1.5 desktop)
+    // 6. Graphics: Pixel Quality (Low = 0.85, Medium = 1.0 phone / 1.25 tablet / 1.5 desktop, High = 1.75, Ultra = 2.0-3.0)
     this.dynamicPRScale = 1.0;
     const dpr = window.devicePixelRatio || 1;
     const targetPR =
@@ -1505,7 +1510,9 @@ export class EngineCore {
     // Dispose previous vehicle completely so only 1 car stays in WebGL/RAM
     this.vehicle.dispose();
     this.vehicle = new SoftBodyVehicle(src, this.arena);
-    this.vehicle.solver.substeps = this.isMobilePhone ? 8 : this.constrained ? 10 : 12;
+    const isLowPerf = this.isMobilePhone || this.currentSettings?.resolutionMode === 'low';
+    this.vehicle.solver.substeps = isLowPerf ? 4 : this.constrained ? 8 : 12;
+    this.vehicle.deformer.lowQualityNormals = isLowPerf;
     this.vehicle.root.visible = true;
     if (this.currentSettings) {
       this.vehicle.steeringSensitivity = this.currentSettings.steeringSensitivity;

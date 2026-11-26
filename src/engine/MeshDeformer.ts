@@ -539,28 +539,6 @@ export class MeshDeformer {
     }
   }
 
-  private gClampActive = false;
-  private gNx = 0;
-  private gNy = 1;
-  private gNz = 0;
-  private gD0 = 0;
-
-  /**
-   * Configures the body-local ground plane (zero-GC) so skinned vertices of bumpers,
-   * roof, hood, trunk, doors, and fenders can never visually clip below the ground/ramp.
-   */
-  setGroundPlane(frame: Float32Array | Float64Array | null, groundH: number, gnx: number, gny: number, gnz: number): void {
-    if (!frame || frame[1] - groundH > 2.4) {
-      this.gClampActive = false;
-      return;
-    }
-    this.gClampActive = true;
-    this.gNx = frame[3] * gnx + frame[4] * gny + frame[5] * gnz;
-    this.gNy = frame[6] * gnx + frame[7] * gny + frame[8] * gnz;
-    this.gNz = frame[9] * gnx + frame[10] * gny + frame[11] * gnz;
-    this.gD0 = (frame[1] - groundH) * gny - 0.012;
-  }
-
   /**
    * Re-skin every group/sub-mesh whose bound nodes moved. `local` holds interpolated
    * node positions in body space (3 per node). Runs at most once per rendered frame.
@@ -621,6 +599,9 @@ export class MeshDeformer {
     this.nodeDirty.fill(0);
   }
 
+  lowQualityNormals = false;
+  private normalFrameCounter = 0;
+
   /**
    * Dedicated monomorphic TurboFan hot path for high-poly .glb meshes:
    * - Updates deformed vertex positions via 4-node frame skinning.
@@ -635,9 +616,6 @@ export class MeshDeformer {
     const uCount = B.uniqueCount;
     let dirtyUniqueCount = 0;
     let maxD2 = B.maxDeformSq;
-
-    const gClamp = this.gClampActive;
-    const gNx = this.gNx, gNy = this.gNy, gNz = this.gNz, gD0 = this.gD0;
 
     for (let u = 0; u < uCount; u++) {
       const u4 = u * 4;
@@ -680,15 +658,6 @@ export class MeshDeformer {
         z += w3 * (local[ni3 + 2] + F[f + 2] * ox + F[f + 5] * oy + F[f + 8] * oz);
       }
 
-      if (gClamp) {
-        const gd = gD0 + gNx * x + gNy * y + gNz * z;
-        if (gd < 0) {
-          x -= gNx * gd;
-          y -= gNy * gd;
-          z -= gNz * gd;
-        }
-      }
-
       const u3 = u * 3;
       const dx = x - uniqueRest[u3];
       const dy = y - uniqueRest[u3 + 1];
@@ -705,8 +674,9 @@ export class MeshDeformer {
     B.maxDeformSq = maxD2;
     if (dirtyUniqueCount === 0) return 0;
 
-    // Targeted local computeVertexNormals strictly on triangles touching deformed vertices
-    const recomputeLocalNormals = maxD2 > 0.00032 && B.triU.length > 0;
+    // Targeted local computeVertexNormals strictly on triangles touching deformed vertices (throttled to every 2nd frame on Low Settings)
+    const allowNormalsThisFrame = !this.lowQualityNormals || ((this.normalFrameCounter++ & 1) === 0);
+    const recomputeLocalNormals = allowNormalsThisFrame && maxD2 > 0.00032 && B.triU.length > 0;
     const uNrm = B.uniqueNrm;
     if (recomputeLocalNormals) {
       for (let u = 0; u < uCount; u++) {
@@ -803,9 +773,7 @@ export class MeshDeformer {
     const disp = B.disp, uniqueRest = B.uniqueRest;
     const uCount = B.uniqueCount;
 
-    const gClamp = this.gClampActive;
-    const gNx = this.gNx, gNy = this.gNy, gNz = this.gNz, gD0 = this.gD0;
-
+    let maxD2 = 0;
     for (let u = 0; u < uCount; u++) {
       const u4 = u * 4, u12 = u * 12;
       let x = 0, y = 0, z = 0;
@@ -819,18 +787,15 @@ export class MeshDeformer {
         y += w * (local[ni3 + 1] + F[f + 1] * ox + F[f + 4] * oy + F[f + 7] * oz);
         z += w * (local[ni3 + 2] + F[f + 2] * ox + F[f + 5] * oy + F[f + 8] * oz);
       }
-      if (gClamp) {
-        const gd = gD0 + gNx * x + gNy * y + gNz * z;
-        if (gd < 0) {
-          x -= gNx * gd;
-          y -= gNy * gd;
-          z -= gNz * gd;
-        }
-      }
       const u3 = u * 3;
-      disp[u3] = x - uniqueRest[u3];
-      disp[u3 + 1] = y - uniqueRest[u3 + 1];
-      disp[u3 + 2] = z - uniqueRest[u3 + 2];
+      const dx = x - uniqueRest[u3];
+      const dy = y - uniqueRest[u3 + 1];
+      const dz = z - uniqueRest[u3 + 2];
+      disp[u3] = dx;
+      disp[u3 + 1] = dy;
+      disp[u3 + 2] = dz;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > maxD2) maxD2 = d2;
     }
 
     let src = disp, dst = B.disp2;
@@ -871,7 +836,9 @@ export class MeshDeformer {
       out[v3 + 2] = uniqueRest[u3 + 2] + src[u3 + 2];
     }
     posAttr.needsUpdate = true;
-    B.mesh.geometry.computeVertexNormals();
+    if (maxD2 > 0.00032 && (!this.lowQualityNormals || ((this.normalFrameCounter++ & 1) === 0))) {
+      B.mesh.geometry.computeVertexNormals();
+    }
     return B.vertCount;
   }
 

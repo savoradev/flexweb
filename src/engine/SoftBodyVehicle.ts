@@ -652,8 +652,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         const sp = Math.sin(phi), cp = Math.cos(phi);
         const x = A * Math.sign(sp) * Math.sqrt(Math.abs(sp)) * 0.93;
         const zz = depth * Math.sqrt(Math.abs(cp)) * 0.93 - 0.05;
-        bumperFLow.push(addNode(x, yLow, zc + zz, 2.2, DeformGroup.BumperF, Zone.Bumper, 0.14, 0.85));
-        bumperFHigh.push(addNode(x, yHigh, zc + zz - 0.015, 2.2, DeformGroup.BumperF, Zone.Bumper, 0.085, 0.85));
+        bumperFLow.push(addNode(x, yLow, zc + zz, 2.2, DeformGroup.BumperF, Zone.Bumper, 0.165, 0.85));
+        bumperFHigh.push(addNode(x, yHigh, zc + zz - 0.015, 2.2, DeformGroup.BumperF, Zone.Bumper, 0.125, 0.85));
       }
       for (let i = 0; i + 1 < 5; i++) {
         addBeam(bumperFLow[i], bumperFLow[i + 1], Zone.Bumper, BEAM_COLLIDE | BEAM_UNBREAKABLE, 1.4, 1.6, 1.15);
@@ -2357,14 +2357,6 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.root.matrix.copy(this.rootMatrix);
     this.root.matrixWorldNeedsUpdate = true;
 
-    if (S.world) {
-      S.world.groundAt(ox, oz, this.ground);
-      this.deformer.setGroundPlane(F, this.ground.h, this.ground.nx, this.ground.ny, this.ground.nz);
-      // If vehicle is rolled/pitched onto its roof or sides near the ground, force visual vertex ground-clamp pass
-      if (F[7] < 0.85 || oy - this.ground.h < 0.42) {
-        this.deformer.markAllDirty();
-      }
-    }
     this.deformer.update(L);
     this.glass.update(frameDt, S.world);
 

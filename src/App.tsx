@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CameraMode, CarOption, EngineCore, EngineStats } from './engine/EngineCore';
-import { isConstrainedDevice } from './engine/MemoryGuard';
+import { useDeviceProfile } from './utils/DeviceDetector';
 import {
   discoverPublicCars,
   fetchPublicCarsFromServer,
@@ -100,12 +100,21 @@ export function App(): React.ReactElement {
   const [loadingState, setLoadingState] = useState<LoadingState | null>(null);
   const [draggingFile, setDraggingFile] = useState(false);
 
-  const isTouchDevice =
-    typeof window !== 'undefined' &&
-    ('ontouchstart' in window || navigator.maxTouchPoints > 0 || isConstrainedDevice());
-  const [diagCollapsed, setDiagCollapsed] = useState(false);
-  const [touchEnabled, setTouchEnabled] = useState(() => isTouchDevice);
+  const device = useDeviceProfile();
+  const isTouchDevice = device.isTouch;
+  const isPhone = device.deviceType === 'phone';
+  const [diagCollapsed, setDiagCollapsed] = useState(() => device.deviceType === 'phone');
+  const [touchEnabled, setTouchEnabled] = useState(
+    () => device.isTouch || device.deviceType === 'phone' || device.deviceType === 'tablet',
+  );
   const [touchPressed, setTouchPressed] = useState({ left: false, right: false, throttle: false, brake: false, handbrake: false });
+
+  useEffect(() => {
+    setTouchEnabled(device.isTouch || device.deviceType === 'phone' || device.deviceType === 'tablet');
+    if (device.deviceType === 'phone') {
+      setDiagCollapsed(true);
+    }
+  }, [device.deviceType, device.isTouch]);
 
   const [isFullscreen, setIsFullscreen] = useState(
     () => typeof document !== 'undefined' && Boolean(document.fullscreenElement),
@@ -755,6 +764,7 @@ export function App(): React.ReactElement {
       {screen === 'settings' && (
         <SettingsModal
           settings={settings}
+          deviceLabel={device.label}
           onChange={updateSettings}
           onResetDefaults={() => updateSettings({ ...DEFAULT_SETTINGS })}
           onClose={() => setScreen(returnScreen)}
@@ -794,11 +804,12 @@ export function App(): React.ReactElement {
               id="pause-menu-btn"
               type="button"
               className="bng-pause-pill"
+              title="Pause (Esc)"
               onClick={() => setScreen('paused')}
             >
               <span>❚❚</span>
-              <span>PAUSE</span>
-              <kbd>Esc</kbd>
+              {!isPhone && <span>PAUSE</span>}
+              {!isPhone && !device.isTouch && <kbd>Esc</kbd>}
             </button>
 
             {settings.showHud && (
@@ -807,13 +818,15 @@ export function App(): React.ReactElement {
                   id="quick-map-btn"
                   type="button"
                   className="btn"
+                  title="Arena Map"
                   onClick={() => setScreen('mapview')}
                 >
-                  Map
+                  {isPhone ? '🗺' : 'Map'}
                 </button>
                 <button
                   type="button"
                   className="btn"
+                  title="Cycle Camera"
                   onClick={() => {
                     const eng = engineRef.current;
                     if (!eng) return;
@@ -821,7 +834,7 @@ export function App(): React.ReactElement {
                     eng.setCameraMode(CAMERA_MODES[(idx + 1) % CAMERA_MODES.length].id);
                   }}
                 >
-                  Cam: {stats?.cameraMode ?? 'chase'}
+                  {isPhone ? `🎥 ${stats?.cameraMode ?? 'chase'}` : `Cam: ${stats?.cameraMode ?? 'chase'}`}
                 </button>
                 <button
                   id="toggle-nodes-btn"
@@ -841,6 +854,7 @@ export function App(): React.ReactElement {
                 <button
                   type="button"
                   className={`btn ${stats?.timeScale === 0.25 ? 'active' : ''}`}
+                  title="Toggle Slow Motion"
                   onClick={() => {
                     const eng = engineRef.current;
                     if (!eng) return;
@@ -856,16 +870,20 @@ export function App(): React.ReactElement {
                   title={isFullscreen ? 'Exit Fullscreen' : 'Enter True Fullscreen'}
                   onClick={toggleFullscreen}
                 >
-                  {isFullscreen ? '⛶ Exit' : '⛶ Full'}
+                  {isPhone ? '⛶' : isFullscreen ? '⛶ Exit' : '⛶ Full'}
                 </button>
                 <button
                   id="reset-vehicle-btn"
                   type="button"
                   className="btn btn-reset"
+                  title="Reset Vehicle (R)"
                   onClick={() => engineRef.current?.reset()}
                 >
-                  Reset (R)
+                  {isPhone ? '↺' : 'Reset (R)'}
                 </button>
+                <span className="device-badge hud-device-badge" title={`Detected: ${device.label} (${device.viewportWidth}×${device.viewportHeight})`}>
+                  {device.label}
+                </span>
               </div>
             )}
           </div>

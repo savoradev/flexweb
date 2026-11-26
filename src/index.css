@@ -15,6 +15,10 @@
   --danger: #ef4444;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
 }
 
 * {
@@ -3182,4 +3186,422 @@ canvas {
   font-size: 11px;
   font-weight: 700;
   color: rgba(226, 232, 240, 0.85);
+}
+
+/* ============================================================================
+   RESPONSIVE MOBILE PHONE LANDSCAPE GUI (740x360px – 950x520px & Touchscreens)
+   Zero overlapping, zero off-screen clipping, safe-area notch support
+   ============================================================================ */
+@media (max-width: 950px), (max-height: 520px) {
+  /* Top HUD Bar: single compact scrollable row respecting notch safe-areas */
+  .bng-ingame-topleft {
+    top: max(6px, env(safe-area-inset-top));
+    left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right));
+    max-width: calc(100vw - env(safe-area-inset-left) - env(safe-area-inset-right) - 16px);
+    gap: 5px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .bng-ingame-topleft::-webkit-scrollbar {
+    display: none;
+  }
+  .bng-ingame-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .bng-ingame-topleft .btn,
+  .bng-ingame-actions .btn,
+  .bng-pause-trigger {
+    height: clamp(26px, 7.5dvh, 32px);
+    padding: 0 clamp(6px, 1.4vw, 10px);
+    font-size: clamp(0.64rem, 1.45vw, 0.75rem);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* Right Diagnostics Drawer: tucked cleanly under top bar, never overlapping pedals */
+  .bng-ingame-right {
+    top: calc(max(6px, env(safe-area-inset-top)) + clamp(32px, 9dvh, 38px)) !important;
+    right: max(8px, env(safe-area-inset-right)) !important;
+    max-width: clamp(165px, 28vw, 220px);
+    max-height: 48dvh;
+    overflow-y: auto;
+    font-size: 0.72rem;
+  }
+
+  /* Bottom-Center Compact Speedometer: sits cleanly between left steering & right pedals */
+  .hud-cluster,
+  .hud-cluster-minimal {
+    left: 50% !important;
+    right: auto !important;
+    transform: translateX(-50%);
+    bottom: max(6px, env(safe-area-inset-bottom)) !important;
+    padding: clamp(5px, 1.4dvh, 8px) clamp(8px, 1.8vw, 12px) !important;
+    border-radius: 12px !important;
+    min-width: 0 !important;
+    max-width: clamp(185px, 34vw, 260px);
+    pointer-events: none;
+  }
+  .hud-cluster-minimal .cluster-main {
+    gap: clamp(6px, 1.4vw, 10px);
+  }
+  .hud-cluster-minimal .speed-value {
+    font-size: clamp(1.25rem, 4.2dvh, 1.75rem) !important;
+    line-height: 1;
+  }
+  .hud-cluster-minimal .speed-unit {
+    font-size: 0.58rem !important;
+  }
+  .hud-cluster-minimal .gear-badge {
+    width: clamp(24px, 6.5dvh, 30px) !important;
+    height: clamp(24px, 6.5dvh, 30px) !important;
+    font-size: clamp(0.75rem, 2.2dvh, 0.92rem) !important;
+  }
+  .hud-cluster-minimal .cluster-rpm {
+    min-width: clamp(78px, 14vw, 118px) !important;
+  }
+  .hud-cluster-minimal .rpm-top,
+  .hud-cluster-minimal .rpm-sub {
+    font-size: clamp(0.56rem, 1.3vw, 0.66rem) !important;
+  }
+  .hud-cluster-minimal .g-peak {
+    display: none;
+  }
+
+  /* Ergonomic Multi-Touch Controls (bottom-left steering + bottom-right pedals/handbrake/shift) */
+  .touch-layer {
+    left: max(8px, env(safe-area-inset-left)) !important;
+    right: max(8px, env(safe-area-inset-right)) !important;
+    bottom: max(6px, env(safe-area-inset-bottom)) !important;
+    padding: 0 !important;
+    touch-action: none;
+  }
+  .touch-wheel-wrap {
+    width: clamp(98px, 28dvh, 130px);
+    height: clamp(98px, 28dvh, 130px);
+  }
+  .touch-wheel-svg {
+    width: clamp(86px, 25dvh, 116px);
+    height: clamp(86px, 25dvh, 116px);
+  }
+  .touch-btn {
+    width: clamp(54px, 15dvh, 72px) !important;
+    height: clamp(54px, 15dvh, 72px) !important;
+    font-size: clamp(0.62rem, 1.6vw, 0.74rem) !important;
+    border-radius: 12px !important;
+  }
+  .touch-right-stack {
+    gap: 5px;
+  }
+  .touch-shift-btn {
+    min-width: clamp(58px, 12vw, 74px);
+    height: clamp(26px, 7.2dvh, 33px);
+    padding: 0 8px;
+    font-size: clamp(0.6rem, 1.4vw, 0.7rem);
+  }
+  .touch-pedals-row {
+    gap: clamp(5px, 1.2vw, 8px);
+  }
+  .touch-hb-btn {
+    width: clamp(44px, 10vw, 54px) !important;
+    height: clamp(52px, 15dvh, 64px) !important;
+    font-size: 9px !important;
+  }
+  .touch-pedal {
+    width: clamp(48px, 11vw, 62px);
+    height: clamp(88px, 27dvh, 124px);
+    padding: 8px 4px;
+    border-radius: 12px;
+  }
+  .touch-pedal-label,
+  .touch-pedal-pct {
+    font-size: clamp(0.58rem, 1.4vw, 0.68rem);
+  }
+
+  /* Modals, Car Selector, Map Selector, Pause Menu, Settings & Main Menu */
+  .bng-overlay-backdrop,
+  .bng-menu-overlay {
+    padding: max(6px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)) !important;
+    align-items: center !important;
+    overflow-y: auto !important;
+    touch-action: pan-y !important;
+  }
+  .bng-modal-shell,
+  .bng-panel,
+  .bng-pause-card,
+  .bng-cars-panel,
+  .bng-maps-panel,
+  .bng-settings-panel,
+  .bng-mapview-card {
+    max-height: 88dvh !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    width: min(96vw, calc(100vw - env(safe-area-inset-left) - env(safe-area-inset-right) - 16px)) !important;
+    padding: clamp(8px, 2.2dvh, 14px) clamp(10px, 2.2vw, 16px) !important;
+  }
+  .bng-modal-header,
+  .bng-panel-header {
+    padding-bottom: 6px !important;
+    margin-bottom: 8px !important;
+    gap: 8px !important;
+  }
+  .bng-modal-title,
+  .bng-panel-header h2 {
+    font-size: clamp(0.95rem, 3.2dvh, 1.25rem) !important;
+    line-height: 1.15 !important;
+  }
+  .bng-eyebrow {
+    font-size: 0.6rem !important;
+    margin-bottom: 2px !important;
+  }
+
+  /* Map Selector (PLAY screen): side-by-side compact cards on landscape phones so Start/Play button is immediately visible! */
+  .bng-map-grid {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 10px !important;
+  }
+  .bng-map-card {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .bng-map-thumb {
+    height: clamp(68px, 23dvh, 112px) !important;
+    min-height: 64px !important;
+  }
+  .bng-map-body {
+    padding: clamp(7px, 1.8dvh, 11px) clamp(8px, 1.8vw, 12px) !important;
+    gap: 5px !important;
+  }
+  .bng-map-body h3 {
+    font-size: clamp(0.84rem, 2.6dvh, 1.02rem) !important;
+    margin: 0 !important;
+  }
+  .bng-map-body p {
+    font-size: clamp(0.66rem, 1.8dvh, 0.76rem) !important;
+    line-height: 1.28 !important;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin: 0 !important;
+  }
+  .bng-map-meta {
+    font-size: 0.66rem !important;
+    padding: 3px 0 !important;
+  }
+
+  /* In-Game Aerial Map Overlay (ArenaMapOverlay): compact topbar & bottom dock so 65%+ of the 3D map stays visible! */
+  .bng-mapview-topbar {
+    top: max(6px, env(safe-area-inset-top)) !important;
+    left: max(8px, env(safe-area-inset-left)) !important;
+    right: max(8px, env(safe-area-inset-right)) !important;
+    padding: 6px 10px !important;
+    gap: 6px !important;
+    flex-wrap: nowrap !important;
+  }
+  .bng-mapview-title strong {
+    display: none !important;
+  }
+  .bng-map-zoom-controls {
+    gap: 4px !important;
+    flex-wrap: nowrap !important;
+  }
+  .bng-map-zoom-controls .btn {
+    height: 28px !important;
+    padding: 0 8px !important;
+    font-size: 0.68rem !important;
+    white-space: nowrap !important;
+  }
+  .bng-mapview-dock {
+    left: max(8px, env(safe-area-inset-left)) !important;
+    right: max(8px, env(safe-area-inset-right)) !important;
+    bottom: max(6px, env(safe-area-inset-bottom)) !important;
+    gap: 5px !important;
+  }
+  .bng-mapview-nums {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    scrollbar-width: none;
+    gap: 4px !important;
+    padding-bottom: 2px;
+  }
+  .bng-mapview-nums::-webkit-scrollbar {
+    display: none;
+  }
+  .bng-num-chip {
+    min-width: 26px !important;
+    height: 24px !important;
+    font-size: 0.68rem !important;
+    flex-shrink: 0 !important;
+  }
+  .bng-mapview-card {
+    grid-template-columns: 1fr 1fr auto !important;
+    gap: 8px !important;
+    padding: 6px 10px !important;
+    align-items: center !important;
+    max-height: 32dvh !important;
+  }
+  .bng-mapview-info h3 {
+    font-size: clamp(0.74rem, 2.2dvh, 0.9rem) !important;
+    margin: 2px 0 0 !important;
+  }
+  .bng-speed-head {
+    font-size: 0.68rem !important;
+  }
+  .bng-speed-pills {
+    display: none !important;
+  }
+  .bng-mapview-actions {
+    flex-direction: row !important;
+    gap: 6px !important;
+  }
+  .bng-mapview-actions .bng-pause-btn,
+  .bng-mapview-actions .bng-cta-btn {
+    height: 32px !important;
+    padding: 0 10px !important;
+    font-size: 0.7rem !important;
+    white-space: nowrap !important;
+  }
+
+  .bng-menu-shell {
+    max-height: 88dvh;
+    overflow-y: auto;
+    padding: clamp(10px, 2.5dvh, 18px) clamp(12px, 3vw, 22px) !important;
+    gap: clamp(8px, 2dvh, 14px) !important;
+  }
+  .bng-menu-title {
+    font-size: clamp(1.35rem, 5.2dvh, 2.1rem) !important;
+  }
+  .bng-menu-cards,
+  .bng-car-grid {
+    gap: 8px !important;
+  }
+  .bng-pause-actions {
+    gap: 6px !important;
+  }
+  .bng-pause-actions .btn,
+  .bng-cta-btn {
+    height: clamp(30px, 8.8dvh, 38px) !important;
+    font-size: clamp(0.7rem, 1.9vw, 0.82rem) !important;
+  }
+}
+
+/* Portrait phone fallback: single-column scrollable Map Selector */
+@media (max-width: 600px) and (orientation: portrait) {
+  .bng-map-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .bng-mapview-card {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ============================================================================
+   AUTOMATIC DEVICE DETECTOR ADAPTIVE UI (html[data-device="phone|tablet|laptop|desktop"])
+   ============================================================================ */
+.device-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: rgba(203, 213, 225, 0.92);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+.hud-device-badge {
+  height: 26px;
+  font-size: 0.66rem;
+  opacity: 0.82;
+}
+
+/* Phone: icon-first compact HUD, full 100dvh lock, notch safe-area insets */
+html[data-device="phone"] .bng-pause-pill {
+  padding: 0 9px;
+  height: clamp(26px, 7.5dvh, 32px);
+  min-width: 32px;
+}
+
+html[data-device="phone"] .hud-device-badge {
+  height: clamp(24px, 7dvh, 28px);
+  font-size: 0.6rem;
+  padding: 0 6px;
+}
+
+/* Tablet: balanced HUD with >= 48px touch hit targets & open center crash view */
+html[data-device="tablet"] .bng-ingame-topleft {
+  top: max(10px, env(safe-area-inset-top));
+  left: max(12px, env(safe-area-inset-left));
+  gap: 8px;
+}
+
+html[data-device="tablet"] .bng-quick-strip .btn,
+html[data-device="tablet"] .bng-pause-pill {
+  min-height: 36px;
+  padding: 0 12px;
+}
+
+html[data-device="tablet"] .touch-btn {
+  min-width: 68px;
+  min-height: 68px;
+}
+
+html[data-device="tablet"] .touch-pedal {
+  min-width: 64px;
+  min-height: 122px;
+}
+
+html[data-device="tablet"] .touch-hb-btn {
+  min-width: 56px !important;
+  min-height: 64px !important;
+}
+
+html[data-device="tablet"] .bng-modal-shell,
+html[data-device="tablet"] .bng-panel {
+  max-height: 86dvh;
+  overflow-y: auto;
+}
+
+/* Laptop (1181px–1440px): space-efficient desktop HUD & compact bars */
+html[data-device="laptop"] .bng-ingame-topleft {
+  top: 10px;
+  left: 12px;
+  gap: 6px;
+}
+
+html[data-device="laptop"] .bng-quick-strip .btn {
+  height: 30px;
+  padding: 0 9px;
+  font-size: 0.74rem;
+}
+
+html[data-device="laptop"] .hud-cluster-minimal {
+  bottom: 10px;
+  right: 12px;
+  padding: 8px 12px;
+}
+
+/* Desktop (> 1440px): full spacious HUD layout */
+html[data-device="desktop"] .bng-ingame-topleft {
+  top: 14px;
+  left: 16px;
+  gap: 10px;
+}
+
+html[data-device="desktop"] .hud-cluster-minimal {
+  bottom: 16px;
+  right: 18px;
 }
