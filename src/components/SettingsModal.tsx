@@ -431,6 +431,29 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
+                    <strong>Weather &amp; HD Rain</strong>
+                    <span>Dripping raindrops on paint &amp; glass, wet asphalt sheen, and tire spray</span>
+                  </div>
+                  <div className="bng-seg-group">
+                    {([
+                      { id: 'off', label: 'Off' },
+                      { id: 'drizzle', label: 'Drizzle' },
+                      { id: 'heavy', label: 'Heavy Rain' },
+                    ] as const).map((w) => (
+                      <button
+                        key={w.id}
+                        type="button"
+                        className={`btn ${(settings.weatherMode ?? 'off') === w.id ? 'active' : ''}`}
+                        onClick={() => patch('weatherMode', w.id)}
+                      >
+                        {w.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bng-setting-row">
+                  <div>
                     <strong>Animated Skybox Clouds</strong>
                     <span>Lightweight procedural volumetric cloud shader</span>
                   </div>

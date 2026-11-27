@@ -239,6 +239,31 @@ export class CrashArena implements CollisionWorld {
   private readonly tmpQuat = new Quaternion();
   private readonly tmpEuler = new Euler();
   private readonly tmpScale = new Vector3(1, 1, 1);
+  private asphaltMat: MeshStandardMaterial | null = null;
+  private lastWetness = -1;
+
+  /** Dynamically lower asphalt roughness and boost wet reflections without recreating materials. */
+  setWetness(wetness: number): void {
+    const w = Math.max(0, Math.min(1, wetness));
+    if (!this.asphaltMat || Math.abs(w - this.lastWetness) < 0.002) return;
+    this.lastWetness = w;
+    this.asphaltMat.roughness = 0.98 - w * 0.80; // 0.98 dry -> 0.18 glossy wet tarmac
+    this.asphaltMat.metalness = w * 0.10;
+    this.asphaltMat.envMapIntensity = 0.03 + w * 1.12;
+    const tint = 1.0 - w * 0.34; // darkened rain-soaked asphalt
+    this.asphaltMat.color.setRGB(tint, tint, tint);
+    const ns = 0.32 - w * 0.16;
+    this.asphaltMat.normalScale.set(ns, ns);
+  }
+
+  /** Fast O(1) check whether (x, z) lies on a wet asphalt / puddle patch. */
+  isWetPatchAt(x: number, z: number): boolean {
+    for (let i = 0; i < this.patches.length; i++) {
+      const p = this.patches[i];
+      if (p.mu <= 0.56 && x >= p.x0 && x <= p.x1 && z >= p.z0 && z <= p.z1) return true;
+    }
+    return false;
+  }
 
   constructor() {
     // ================================================================
@@ -1365,16 +1390,17 @@ export class CrashArena implements CollisionWorld {
     asphaltPack.map.repeat.set(360, 360);
     asphaltPack.normalMap.repeat.set(360, 360);
     asphaltPack.roughnessMap.repeat.set(360, 360);
+    this.asphaltMat = new MeshStandardMaterial({
+      map: asphaltPack.map,
+      normalMap: asphaltPack.normalMap,
+      normalScale: new Vector2(0.32, 0.32),
+      roughness: 0.98,
+      metalness: 0.0,
+      envMapIntensity: 0.03,
+    });
     const asphalt = new Mesh(
       new PlaneGeometry(this.asphaltHalf * 2, this.asphaltHalf * 2),
-      new MeshStandardMaterial({
-        map: asphaltPack.map,
-        normalMap: asphaltPack.normalMap,
-        normalScale: new Vector2(0.32, 0.32),
-        roughness: 0.98,
-        metalness: 0.0,
-        envMapIntensity: 0.03,
-      }),
+      this.asphaltMat,
     );
     asphalt.rotation.x = -Math.PI / 2;
     asphalt.receiveShadow = true;

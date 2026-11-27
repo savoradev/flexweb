@@ -107,3 +107,66 @@ export function isConstrainedDevice(): boolean {
   const lowMem = nav.deviceMemory !== undefined && nav.deviceMemory <= 4;
   return touch || lowMem;
 }
+
+/**
+ * Bounded LRU in-memory vehicle template cache.
+ * Keeps up to `maxEntries` (default: 2 on low-RAM mobile/tablets, 4 on desktop)
+ * parsed & pre-bound vehicles ready for < 5 ms instant switching while calling
+ * `.dispose()` on evicted entries so 4 GB RAM devices never hit OOM.
+ */
+export class BoundedVehicleTemplateCache<T extends { dispose(): void }> {
+  private readonly entries = new Map<string, T>();
+  readonly maxEntries: number;
+
+  constructor(maxEntries?: number) {
+    this.maxEntries = maxEntries ?? (isConstrainedDevice() ? 2 : 4);
+  }
+
+  get(key: string): T | undefined {
+    const hit = this.entries.get(key);
+    if (!hit) return undefined;
+    // Refresh LRU recency
+    this.entries.delete(key);
+    this.entries.set(key, hit);
+    return hit;
+  }
+
+  has(key: string): boolean {
+    return this.entries.has(key);
+  }
+
+  /** Removes an entry from the cache WITHOUT disposing it (e.g. when activating it in the scene). */
+  take(key: string): T | undefined {
+    const hit = this.entries.get(key);
+    if (hit) this.entries.delete(key);
+    return hit;
+  }
+
+  /** Parks a vehicle template in the cache; evicts & disposes the least-recently-used entry if full. */
+  set(key: string, value: T): void {
+    const existing = this.entries.get(key);
+    if (existing && existing !== value) {
+      existing.dispose();
+    }
+    this.entries.delete(key);
+    this.entries.set(key, value);
+    while (this.entries.size > this.maxEntries) {
+      const oldestKey = this.entries.keys().next().value;
+      if (oldestKey === undefined) break;
+      const oldest = this.entries.get(oldestKey);
+      this.entries.delete(oldestKey);
+      oldest?.dispose();
+    }
+  }
+
+  clear(): void {
+    for (const v of this.entries.values()) {
+      try { v.dispose(); } catch { /* ignore */ }
+    }
+    this.entries.clear();
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
+}

@@ -12,7 +12,7 @@
 const DB_NAME = 'FlexWebMeshCache';
 const DB_VERSION = 1;
 const STORE_NAME = 'skinning';
-export const SKINNING_CACHE_SCHEMA_VERSION = 5;
+export const SKINNING_CACHE_SCHEMA_VERSION = 9;
 
 export interface PrecomputedBindingData {
   group: number;

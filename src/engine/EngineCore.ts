@@ -5,11 +5,13 @@ import {
   Texture, Vector3, WebGLCubeRenderTarget, WebGLRenderer, WebGLRenderTarget,
 } from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { getSharedGltfLoader } from './SharedGltfLoader';
 import { CrashArena, CrashTestPreset, SKY_COLOR, STUDIO_SHOWROOM_Y } from './CrashArena';
+import { clearOldAssetCaches, getCachedAssetBytes, putCachedAssetBytes } from './AssetCache';
+import { RainWeatherSystem, WeatherMode } from './RainWeatherSystem';
 import { detectDeviceProfile } from '../utils/DeviceDetector';
 import { FixedTimestepLoop } from './FixedTimestepLoop';
-import { heapUsedMB, isConstrainedDevice, Scratch } from './MemoryGuard';
+import { BoundedVehicleTemplateCache, heapUsedMB, isConstrainedDevice, Scratch } from './MemoryGuard';
 import {
   loadCachedSkinning,
   PrecomputedBindingData,
@@ -26,6 +28,7 @@ import {
 } from './SoftBodyVehicle';
 import {
   fetchLocalModelChunked,
+  GITHUB_CARS,
   loadRemoteCarWithFallbacks,
   ModelAttribution,
   parseGltfFromZipBytes,
@@ -133,10 +136,17 @@ export class EngineCore {
   lastResetMs = 0.25;
 
   private readonly container: HTMLElement;
+  private readonly hemiLight: HemisphereLight;
   private readonly dirLight: DirectionalLight;
-  private readonly gltfLoader = new GLTFLoader();
+  private readonly gltfLoader = getSharedGltfLoader();
   private readonly skyDome: Mesh;
-  private readonly skyUniforms = { uTime: { value: 0 } };
+  private readonly skyUniforms = { uTime: { value: 0 }, uRain: { value: 0 }, uLightning: { value: 0 } };
+  private lightningTimer = 6.5;
+  private lightningFlash = 0;
+  private readonly dryHemiSky = new Color(0xeef4ff);
+  private readonly wetHemiSky = new Color(0x6e8094);
+  private readonly drySunCol = new Color(0xfff6e8);
+  private readonly wetSunCol = new Color(0xa9bdd4);
   private readonly pmrem: PMREMGenerator;
   private readonly studioEnvRT: WebGLRenderTarget;
   private readonly cubeRT: WebGLCubeRenderTarget;
@@ -183,16 +193,39 @@ export class EngineCore {
   private workerReqId = 1;
   private loadGeneration = 0;
   private readonly memSkinCache = new Map<string, PrecomputedBindingData[]>();
+  /** Bounded LRU in-memory vehicle template cache (max 2 on mobile/4GB tablets, max 4 on desktop) for < 5ms switching. */
+  private readonly vehicleTemplateCache = new BoundedVehicleTemplateCache<SoftBodyVehicle>();
+  private activeCacheKey = '';
+  private secondaryPreloadScheduled = false;
   private paintByCar: Record<string, number> = {};
   private readonly isMobilePhone: boolean;
   private shadowFrameCounter = 0;
   private blobShadow: Mesh | null = null;
   private mobileReflBaked = false;
+  /** Zero-cost weather hook (0 = Off: skips all weather/rain updates & shader work). */
+  private readonly rain: RainWeatherSystem;
+  private readonly wheelSprayPos = new Float32Array(12);
+  private readonly wheelSprayGrounded = new Uint8Array(4);
+  private rainIntensity = 0;
+  /** Dirty flag to skip redundant renderer.render() passes when paused and camera is stationary. */
+  private renderDirty = true;
+  private prevCamX = NaN;
+  private prevCamY = NaN;
+  private prevCamZ = NaN;
+  private prevCamQx = NaN;
+  private prevCamQy = NaN;
+  private prevCamQz = NaN;
+  private prevCamQw = NaN;
+  private lastReflX = NaN;
+  private lastReflZ = NaN;
+  private lastReflRain = -1;
+  private readonly tmpPaintColor = new Color();
 
   constructor(container: HTMLElement, onStats?: (s: EngineStats) => void) {
     this.container = container;
     this.onStats = onStats;
     this.constrained = isConstrainedDevice();
+    void clearOldAssetCaches();
     this.isMobilePhone =
       /Android|iPhone|iPod/i.test(navigator.userAgent) ||
       (this.constrained && Math.min(window.innerWidth || 800, window.innerHeight || 600) < 600);
@@ -211,17 +244,17 @@ export class EngineCore {
 
     const w = Math.max(1, container.clientWidth);
     const h = Math.max(1, container.clientHeight);
-    this.camera = new PerspectiveCamera(54, w / h, 0.14, 3200);
+    this.camera = new PerspectiveCamera(54, w / h, 0.35, 3600);
 
     const dpr = window.devicePixelRatio || 1;
     this.renderer = new WebGLRenderer({
-      antialias: !this.constrained && dpr < 1.25,
+      antialias: !this.isMobilePhone && !this.constrained && dpr < 1.5,
       powerPreference: 'high-performance',
       stencil: false,
       depth: true,
       preserveDrawingBuffer: false,
     });
-    const maxPR = this.isMobilePhone ? 1.0 : this.constrained ? 1.25 : 1.5;
+    const maxPR = this.isMobilePhone || this.constrained ? 1.0 : 1.5;
     const pr = Math.min(dpr, maxPR);
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
@@ -255,6 +288,8 @@ export class EngineCore {
       `,
       fragmentShader: `
         uniform float uTime;
+        uniform float uRain;
+        uniform float uLightning;
         varying vec3 vDir;
         float hash(vec2 p) {
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -282,32 +317,45 @@ export class EngineCore {
         void main() {
           vec3 d = normalize(vDir);
           float y = clamp(d.y, 0.0, 1.0);
-          vec3 zenith = vec3(0.24, 0.46, 0.78);
-          vec3 horizon = vec3(0.75, 0.84, 0.93);
-          vec3 ground = vec3(0.45, 0.50, 0.55);
+          float r = clamp(uRain, 0.0, 1.0);
+
+          // Sunny blue sky smoothly transitions into dark overcast storm slate when raining
+          vec3 zenith = mix(vec3(0.24, 0.46, 0.78), vec3(0.09, 0.12, 0.17), r);
+          vec3 horizon = mix(vec3(0.75, 0.84, 0.93), vec3(0.27, 0.31, 0.37), r);
+          vec3 ground = mix(vec3(0.45, 0.50, 0.55), vec3(0.16, 0.19, 0.23), r);
           vec3 col = d.y >= 0.0 ? mix(horizon, zenith, pow(y, 0.58)) : mix(horizon, ground, clamp(-d.y * 4.0, 0.0, 1.0));
 
-          // Soft warm sun glow
+          // Warm sun glow fades behind thick storm clouds
           vec3 sunDir = normalize(vec3(0.45, 0.62, 0.40));
           float sunDot = max(dot(d, sunDir), 0.0);
-          col += vec3(1.0, 0.94, 0.82) * (pow(sunDot, 16.0) * 0.22 + pow(sunDot, 180.0) * 0.65);
+          float sunVis = 1.0 - r * 0.94;
+          col += vec3(1.0, 0.94, 0.82) * (pow(sunDot, 16.0) * 0.22 + pow(sunDot, 180.0) * 0.65) * sunVis;
 
-          // Slowly drifting soft volumetric cloud layer
-          if (d.y > 0.02) {
+          // Volumetric clouds thicken, darken & move faster during rain + catch distant sheet lightning
+          if (d.y > 0.015) {
             vec2 uv = d.xz / (d.y + 0.18) * 1.15;
-            vec2 wind = vec2(uTime * 0.012, uTime * 0.005);
+            float windBoost = 1.0 + r * 1.6;
+            vec2 wind = vec2(uTime * 0.012 * windBoost, uTime * 0.005 * windBoost);
             float c1 = fbm(uv + wind);
             float c2 = fbm(uv * 1.9 - wind * 0.6 + 4.2);
-            float density = smoothstep(0.47, 0.76, c1 * 0.72 + c2 * 0.28);
-            float horizonFade = smoothstep(0.02, 0.24, d.y);
-            vec3 cloudLit = mix(vec3(0.84, 0.88, 0.93), vec3(1.0, 0.99, 0.96), clamp(c1 * 1.2 + sunDot * 0.25, 0.0, 1.0));
-            col = mix(col, cloudLit, density * horizonFade * 0.86);
+            float rawC = c1 * 0.72 + c2 * 0.28;
+            float lo = mix(0.47, 0.20, r);
+            float hi = mix(0.76, 0.64, r);
+            float density = smoothstep(lo, hi, rawC);
+            float horizonFade = smoothstep(0.015, 0.22, d.y);
+
+            vec3 sunnyCloud = mix(vec3(0.84, 0.88, 0.93), vec3(1.0, 0.99, 0.96), clamp(c1 * 1.2 + sunDot * 0.25, 0.0, 1.0));
+            vec3 stormCloud = mix(vec3(0.17, 0.20, 0.25), vec3(0.36, 0.40, 0.46), clamp(c2 * 1.15, 0.0, 1.0));
+            vec3 cloudCol = mix(sunnyCloud, stormCloud, r);
+            // Distant sheet lightning illuminating storm cloud bellies
+            cloudCol += vec3(0.78, 0.88, 1.0) * uLightning * smoothstep(0.35, 0.75, c1) * 1.4;
+            col = mix(col, cloudCol, density * horizonFade * mix(0.86, 0.96, r));
           }
           gl_FragColor = vec4(col, 1.0);
         }
       `,
     });
-    this.skyDome = new Mesh(new SphereGeometry(4800, 24, 16), skyMat);
+    this.skyDome = new Mesh(new SphereGeometry(3000, 24, 16), skyMat);
     this.skyDome.frustumCulled = false;
     this.scene.add(this.skyDome);
 
@@ -321,11 +369,11 @@ export class EngineCore {
       generateMipmaps: true,
       minFilter: LinearMipmapLinearFilter,
     });
-    // Far plane (5000) exceeds skyDome radius (4800) so clouds & sky are captured in real-time reflections
-    this.cubeCamera = new CubeCamera(0.45, 5000, this.cubeRT);
+    // Far plane (3200) exceeds skyDome radius (3000) so clouds & sky are captured in real-time reflections
+    this.cubeCamera = new CubeCamera(0.45, 3200, this.cubeRT);
 
-    const hemi = new HemisphereLight(0xeef4ff, 0x3b4046, 0.85);
-    this.scene.add(hemi);
+    this.hemiLight = new HemisphereLight(0xeef4ff, 0x3b4046, 0.85);
+    this.scene.add(this.hemiLight);
 
     this.dirLight = new DirectionalLight(0xfff6e8, 2.2);
     this.dirLight.position.set(18, 28, 16);
@@ -338,8 +386,8 @@ export class EngineCore {
     this.dirLight.shadow.camera.right = d;
     this.dirLight.shadow.camera.top = d;
     this.dirLight.shadow.camera.bottom = -d;
-    this.dirLight.shadow.bias = -0.00025;
-    this.dirLight.shadow.normalBias = 0.03;
+    this.dirLight.shadow.bias = -0.0008;
+    this.dirLight.shadow.normalBias = 0.05;
     this.scene.add(this.dirLight);
     this.scene.add(this.dirLight.target);
 
@@ -350,11 +398,15 @@ export class EngineCore {
     // Internal boot placeholder hidden until first GLB car (BMW M4 CSL / Dodge Demon / McLaren P1) loads
     const src = createProceduralVehicleSource('Loading Vehicle', 0x8e969d);
     this.vehicle = new SoftBodyVehicle(src, this.arena);
-    this.vehicle.solver.substeps = this.constrained ? 10 : 12;
+    const maxSubstepsPerFrame = this.isMobilePhone || this.constrained ? 6 : 8;
+    this.vehicle.solver.substeps = maxSubstepsPerFrame;
     this.vehicle.root.visible = false;
     this.scene.add(this.vehicle.root);
     this.scene.add(this.vehicle.glass.mesh);
     this.scene.add(this.vehicle.fluids.group);
+    this.rain = new RainWeatherSystem(this.isMobilePhone || this.constrained);
+    this.scene.add(this.rain.group);
+    this.rain.attachToVehicle(this.vehicle.root);
     this.buildLatticeOverlay();
 
     // camera controls on canvas
@@ -365,8 +417,107 @@ export class EngineCore {
     this.loop = new FixedTimestepLoop({
       step: (dt) => this.step(dt),
       render: (alpha, frameDt) => this.render(alpha, frameDt),
+      maxSubstepsPerFrame,
     });
     this.loop.start();
+  }
+
+  // ================================================================ weather (zero-cost when Off)
+
+  /** Set weather preset ('off' | 'drizzle' | 'heavy'). */
+  setWeatherMode(mode: WeatherMode): void {
+    this.rain.setWeatherMode(mode);
+    this.rainIntensity = this.rain.targetIntensity;
+    this.mobileReflBaked = false; // re-bake wet reflections to match new storm/sunny sky
+    this.renderDirty = true;
+  }
+
+  /** Set optional rain intensity (0 = Off -> zero CPU/GPU work per frame). */
+  setRainIntensity(intensity: number): void {
+    const next = Math.max(0, Math.min(1, intensity));
+    if (next !== this.rainIntensity) {
+      this.rainIntensity = next;
+      this.rain.setIntensity(next);
+      this.mobileReflBaked = false;
+      this.renderDirty = true;
+    }
+  }
+
+  getRainIntensity(): number {
+    return this.rainIntensity;
+  }
+
+  /** Zero-cost weather hook: immediately returns when rain is Off, surfaces are dry, and car is not on a wet patch. */
+  private updateWeather(frameDt: number): void {
+    const F = this.vehicle.getFrame();
+    const onWetPatch = this.arena.isWetPatchAt(F[0], F[2]);
+    if (!this.rain.isActive() && !onWetPatch) {
+      if (this.skyUniforms.uRain.value > 0) {
+        this.skyUniforms.uRain.value = 0;
+        this.skyUniforms.uLightning.value = 0;
+        this.dirLight.intensity = 2.2;
+        this.dirLight.color.copy(this.drySunCol);
+        this.hemiLight.intensity = 0.85;
+        this.hemiLight.color.copy(this.dryHemiSky);
+        this.renderer.toneMappingExposure = 1.05;
+      }
+      return;
+    }
+
+    const S = this.vehicle.solver;
+    const vx = S.vx[0] ?? 0;
+    const vy = S.vy[0] ?? 0;
+    const vz = S.vz[0] ?? 0;
+    const speedAbs = Math.sqrt(vx * vx + vy * vy + vz * vz);
+    this.vehicle.getWheelContactPositions(this.wheelSprayPos, this.wheelSprayGrounded);
+
+    const wet = this.rain.update(
+      frameDt,
+      this.camera.position.x,
+      this.camera.position.y,
+      this.camera.position.z,
+      vx,
+      vy,
+      vz,
+      speedAbs,
+      this.wheelSprayPos,
+      this.wheelSprayGrounded,
+      onWetPatch,
+    );
+
+    this.arena.setWetness(wet);
+    this.vehicle.wetness = wet;
+
+    // Reactive storm skybox, occasional sheet lightning in heavy rain & moody overcast lighting (zero GC)
+    const r = this.rain.intensity;
+    this.skyUniforms.uRain.value = r;
+    if (r > 0.72) {
+      this.lightningTimer -= frameDt;
+      if (this.lightningTimer <= 0) {
+        this.lightningFlash = 0.95;
+        this.lightningTimer = 7.5 + ((Math.sin(this.skyUniforms.uTime.value * 12.9898) * 43758.5453) % 1 + 1) * 4.5;
+      }
+    }
+    if (this.lightningFlash > 0.001) {
+      this.lightningFlash *= Math.exp(-9.5 * frameDt);
+      if (this.lightningFlash < 0.004) this.lightningFlash = 0;
+    }
+    this.skyUniforms.uLightning.value = this.lightningFlash;
+
+    this.dirLight.intensity = 2.2 - r * 1.42 + this.lightningFlash * 1.65;
+    this.dirLight.color.copy(this.drySunCol).lerp(this.wetSunCol, r);
+    this.hemiLight.intensity = 0.85 - r * 0.30 + this.lightningFlash * 0.45;
+    this.hemiLight.color.copy(this.dryHemiSky).lerp(this.wetHemiSky, r);
+    this.renderer.toneMappingExposure = 1.05 - r * 0.11;
+
+    // Smooth overcast sky & fog tint when raining (reuses pre-allocated Color — zero GC)
+    if (this.scene.background instanceof Color) {
+      this.scene.background.copy(this.rain.outSkyColor);
+    }
+    if (this.scene.fog instanceof FogExp2) {
+      this.scene.fog.color.copy(this.rain.outSkyColor);
+      this.scene.fog.density = 0.00006 + r * 0.00046;
+    }
   }
 
   // ================================================================ loop
@@ -374,12 +525,15 @@ export class EngineCore {
   private step(dt: number): void {
     this.arena.updateDynamic(dt, this.vehicle.solver);
     this.vehicle.step(dt);
+    this.renderDirty = true;
   }
 
   private render(alpha: number, frameDt: number): void {
     Scratch.pool.reset();
-    this.skyUniforms.uTime.value += frameDt;
-    this.vehicle.render(alpha, frameDt);
+    if (!this.loop.paused || this.renderDirty) {
+      this.skyUniforms.uTime.value += frameDt;
+      this.vehicle.render(alpha, frameDt);
+    }
     this.updateCamera(frameDt);
     if (this.showLattice) this.updateLatticeOverlay();
 
@@ -389,17 +543,40 @@ export class EngineCore {
       this.orbitPitch = 0.22;
       this.orbitDist = 5.6;
       this.userDragTimer = 2.0;
+      this.renderDirty = true;
     }
 
-    // Smooth dynamic resolution scaling (steps pixelRatio smoothly between 0.85 and 1.25 on mobile if frame time > 17 ms)
+    // Zero-cost idle guard for optional weather/rain effects (0 work when rain is Off & dry)
+    const rainActive = this.rain.isActive();
+    if (rainActive || !this.loop.paused) {
+      this.updateWeather(frameDt);
+      if (rainActive) this.renderDirty = true;
+    }
+
+    // Skip redundant WebGL renderer.render() passes when paused and camera/scene are completely idle
+    const camPos = this.camera.position;
+    const camQ = this.camera.quaternion;
+    const camMoved =
+      Math.abs(camPos.x - this.prevCamX) > 1e-4 ||
+      Math.abs(camPos.y - this.prevCamY) > 1e-4 ||
+      Math.abs(camPos.z - this.prevCamZ) > 1e-4 ||
+      Math.abs(camQ.x - this.prevCamQx) > 1e-4 ||
+      Math.abs(camQ.y - this.prevCamQy) > 1e-4 ||
+      Math.abs(camQ.z - this.prevCamQz) > 1e-4 ||
+      Math.abs(camQ.w - this.prevCamQw) > 1e-4;
+    if (this.loop.paused && !this.renderDirty && !camMoved && !this.menuDemoMode && !rainActive) {
+      return;
+    }
+
+    // Smooth dynamic resolution scaling (caps pixelRatio <= 1.0 on mobile/tablet, <= 1.5 on desktop)
     this.dynamicPRCooldown -= frameDt;
     if (this.dynamicPRCooldown <= 0 && !this.menuDemoMode && (this.currentSettings?.resolutionMode ?? 'medium') === 'medium') {
       const fms = this.loop.frameMs;
       const dpr = window.devicePixelRatio || 1;
-      const maxPR = this.isMobilePhone ? Math.min(dpr, 1.25) : this.constrained ? Math.min(dpr, 1.25) : Math.min(dpr, 1.5);
-      const minPR = 0.85;
-      if (fms > 17.0 && this.dynamicPRScale > minPR / Math.max(0.85, maxPR)) {
-        this.dynamicPRScale = Math.max(minPR / Math.max(0.85, maxPR), this.dynamicPRScale - 0.06);
+      const maxPR = this.isMobilePhone || this.constrained ? Math.min(dpr, 1.0) : Math.min(dpr, 1.5);
+      const minPR = 0.80;
+      if (fms > 17.0 && this.dynamicPRScale > minPR / Math.max(0.80, maxPR)) {
+        this.dynamicPRScale = Math.max(minPR / Math.max(0.80, maxPR), this.dynamicPRScale - 0.06);
         this.renderer.setPixelRatio(Math.max(minPR, Math.min(maxPR, maxPR * this.dynamicPRScale)));
         this.dynamicPRCooldown = 1.0;
       } else if (fms < 13.5 && this.dynamicPRScale < 1.0) {
@@ -411,19 +588,29 @@ export class EngineCore {
 
     // Throttled CubeCamera -> PMREM reflections:
     // - On mobile phones in Low mode: bake once per spawn (0 ms/frame while driving!)
+    // - On desktop: update at most once every 90/180 frames AND only if the car moved > 12m or rain changed
     // - Always disable shadowMap during cubeCamera.update() so it NEVER consumes shadowMap.needsUpdate while the car is hidden!
+    const FRefl = this.vehicle.getFrame();
+    const reflDistSq = Number.isNaN(this.lastReflX)
+      ? 1e9
+      : (FRefl[0] - this.lastReflX) * (FRefl[0] - this.lastReflX) + (FRefl[2] - this.lastReflZ) * (FRefl[2] - this.lastReflZ);
+    const reflWeatherChanged = Math.abs(this.rain.intensity - this.lastReflRain) > 0.08;
     const shouldUpdateRefl =
       this.reflectionQuality !== 'off' &&
       (this.isMobilePhone
         ? this.reflectionQuality === 'high'
-          ? (this.reflFrameCounter++ % 180) === 0
+          ? (this.reflFrameCounter++ % 240) === 0 && (reflDistSq > 225 || reflWeatherChanged)
           : !this.mobileReflBaked
-        : (this.reflFrameCounter++ % (this.reflectionQuality === 'high' ? 12 : 30)) === 0);
+        : (!this.mobileReflBaked ||
+            ((this.reflFrameCounter++ % (this.reflectionQuality === 'high' ? 90 : 180)) === 0 &&
+              (reflDistSq > 144 || reflWeatherChanged))));
 
     if (shouldUpdateRefl) {
       this.mobileReflBaked = true;
-      const F = this.vehicle.getFrame();
-      this.cubeCamera.position.set(F[0], F[1] + 0.95, F[2]);
+      this.lastReflX = FRefl[0];
+      this.lastReflZ = FRefl[2];
+      this.lastReflRain = this.rain.intensity;
+      this.cubeCamera.position.set(FRefl[0], FRefl[1] + 0.95, FRefl[2]);
       this.skyDome.position.copy(this.cubeCamera.position);
       const prevVis = this.vehicle.root.visible;
       const prevLat = this.latticeLines ? this.latticeLines.visible : false;
@@ -456,6 +643,14 @@ export class EngineCore {
 
     this.skyDome.position.copy(this.camera.position);
     this.renderer.render(this.scene, this.camera);
+    this.prevCamX = camPos.x;
+    this.prevCamY = camPos.y;
+    this.prevCamZ = camPos.z;
+    this.prevCamQx = camQ.x;
+    this.prevCamQy = camQ.y;
+    this.prevCamQz = camQ.z;
+    this.prevCamQw = camQ.w;
+    this.renderDirty = false;
 
     if (!this.loggedDrawCalls) {
       this.loggedDrawCalls = true;
@@ -673,7 +868,7 @@ export class EngineCore {
       this.renderer.shadowMap.enabled = true;
       this.renderer.shadowMap.autoUpdate = false;
       this.dirLight.castShadow = true;
-      const sz = s.shadowQuality === 'high' ? 2048 : 1024;
+      const sz = this.constrained ? 512 : 1024;
       if (this.dirLight.shadow.mapSize.x !== sz) {
         this.dirLight.shadow.mapSize.set(sz, sz);
         this.dirLight.shadow.map?.dispose();
@@ -682,8 +877,8 @@ export class EngineCore {
       this.renderer.shadowMap.needsUpdate = true;
     }
 
-    // 4. Physics substeps & normal throttling for Low Settings / Mobile Mode (4 substeps @ 1/60s = 2x faster CPU!)
-    this.vehicle.solver.substeps = isLowPerf ? 4 : this.constrained ? 8 : 12;
+    // 4. Strict fixed-timestep substeps (8 desktop, 6 mobile/tablet) for identical stability at 30/60/120 FPS
+    this.vehicle.solver.substeps = this.loop.maxSubstepsPerFrame;
     this.vehicle.deformer.lowQualityNormals = isLowPerf;
 
     // 5. Graphics: Real-time Reflections
@@ -694,24 +889,23 @@ export class EngineCore {
       this.scene.environment = (this.envRT ?? this.studioEnvRT).texture;
     }
 
-    // 6. Graphics: Pixel Quality (Low = 0.85, Medium = 1.0 phone / 1.25 tablet / 1.5 desktop, High = 1.75, Ultra = 2.0-3.0)
+    // 6. Graphics: Pixel Quality (strict adaptive caps: <= 1.0 phone/tablet/constrained, <= 1.5 desktop)
     this.dynamicPRScale = 1.0;
     const dpr = window.devicePixelRatio || 1;
+    const maxAllowedPR = this.isMobilePhone || this.constrained ? 1.0 : 1.5;
     const targetPR =
       s.resolutionMode === 'low'
         ? Math.min(dpr, 0.85)
-        : s.resolutionMode === 'high'
-          ? Math.min(dpr, 1.75)
-          : s.resolutionMode === 'ultra'
-            ? Math.max(2.0, Math.min(dpr, 3.0))
-            : Math.min(dpr, this.isMobilePhone ? 1.0 : this.constrained ? 1.25 : 1.5);
+        : Math.min(dpr, maxAllowedPR);
     this.renderer.setPixelRatio(targetPR);
+    this.renderDirty = true;
     this.onResize();
 
-    // 6. Graphics: Full-Map + Skybox Far Plane (6500m > 4800m skyDome radius so skybox is ALWAYS visible)
-    this.camera.far = 6500;
+    // 6. Graphics: Full-Map + Skybox Far Plane (3600m > 3000m skyDome radius for crisp depth precision with zero Z-fighting)
+    this.camera.far = 3600;
     this.camera.updateProjectionMatrix();
     this.skyDome.visible = s.skyboxClouds;
+    this.setWeatherMode(s.weatherMode ?? 'off');
   }
 
   unlockAudio(): void {
@@ -1069,6 +1263,7 @@ export class EngineCore {
   reset(x = 0, z = 0, yaw = 0, speedKmh = 0, lateral = false): void {
     const t0 = performance.now();
     this.arena.resetDynamic();
+    this.rain.reset();
     this.vehicle.spawn(x, z, yaw, speedKmh / 3.6, lateral);
     if (speedKmh > 0 && !lateral) this.vehicle.autopilotSpeed = speedKmh / 3.6;
     const F = this.vehicle.getFrame();
@@ -1077,6 +1272,7 @@ export class EngineCore {
     this.camVel.set(0, 0, 0);
     this.lastShadowX = Number.NaN;
     this.mobileReflBaked = false;
+    this.renderDirty = true;
     this.lastResetMs = performance.now() - t0;
   }
 
@@ -1087,7 +1283,7 @@ export class EngineCore {
   setPaintColor(hex: number, targetCarId?: string): void {
     const carId = targetCarId || this.activeCarId;
     if (carId === this.activeCarId) {
-      const c = new Color(hex);
+      const c = this.tmpPaintColor.set(hex);
       const vSrc = (this.vehicle as unknown as {
         src: { materials: { paint: { color: Color; needsUpdate?: boolean } }; paintMaterials?: { color: Color; needsUpdate?: boolean }[] };
       }).src;
@@ -1105,7 +1301,7 @@ export class EngineCore {
         const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         for (const m of mats) {
           const sm = m as { name?: string; color?: Color; needsUpdate?: boolean } | null;
-          if (sm?.color && sm.name && /^(Car_?paint|Car_?Paint_?\.?\d*|CARS|carpaint_second)$/i.test(sm.name)) {
+          if (sm?.color && sm.name && /^(Car_?paint|Car_?Paint_?\.?\d*|CARS|carpaint_second|ARm4_main)$/i.test(sm.name)) {
             sm.color.copy(c);
             sm.needsUpdate = true;
           }
@@ -1117,9 +1313,8 @@ export class EngineCore {
   }
 
   /**
-   * Switches to `option`, disposing the previous vehicle's WebGL geometries,
-   * textures, and TypedArray pools so strictly 1 active car resides in RAM at
-   * any time (4 GB RAM Samsung Galaxy Tab A9+ memory guard).
+   * Switches to `option`, parking the previous vehicle in a bounded LRU cache
+   * (max 2 on 4 GB RAM tablets/phones, max 4 on desktop) for < 5 ms switching.
    *
    * Pipeline (all stages profiled with console.time):
    *  1. GLTFLoader parse + parallel FlexWebMeshCache IndexedDB lookup
@@ -1154,6 +1349,58 @@ export class EngineCore {
     const totalTag = `[FlexWeb Load] Total (${option.name})`;
     console.time(totalTag);
     const cacheKey = `v${SKINNING_CACHE_SCHEMA_VERSION}:${option.id}:${option.bytes ?? option.url ?? option.remoteUrls?.[0] ?? option.name}`;
+
+    // Instant < 5 ms switching if this vehicle is already active or parked in the bounded LRU template cache
+    if (this.activeCacheKey === cacheKey && this.activeCarId === option.id) {
+      if (option.paint !== undefined) this.setPaintColor(option.paint);
+      this.reset(0, 0, 0, 0);
+      onProgress?.('Vehicle Spawned', 100);
+      console.timeEnd(totalTag);
+      return;
+    }
+    const cachedVehicle = this.vehicleTemplateCache.take(cacheKey);
+    if (cachedVehicle) {
+      if (this.activeCacheKey && this.activeCacheKey !== cacheKey) {
+        this.scene.remove(this.vehicle.root);
+        this.scene.remove(this.vehicle.glass.mesh);
+        this.scene.remove(this.vehicle.fluids.group);
+        this.vehicleTemplateCache.set(this.activeCacheKey, this.vehicle);
+      } else {
+        this.vehicle.dispose();
+      }
+      this.vehicle = cachedVehicle;
+      this.activeCacheKey = cacheKey;
+      this.vehicle.solver.substeps = this.loop.maxSubstepsPerFrame;
+      this.vehicle.root.visible = true;
+      if (this.currentSettings) {
+        this.vehicle.steeringSensitivity = this.currentSettings.steeringSensitivity;
+        this.vehicle.absEnabled = this.currentSettings.absEnabled;
+        this.vehicle.tcsEnabled = this.currentSettings.tcsEnabled;
+        this.vehicle.transmissionMode = this.currentSettings.transmissionMode;
+      }
+      this.sound.setProfileFromCarName(this.vehicle.name);
+      this.activeCarId = option.id;
+      setLastSelectedCarId(option.id);
+      const savedHex = this.paintByCar[option.id] ?? option.paint;
+      if (savedHex !== undefined) this.setPaintColor(savedHex, option.id);
+      if (this.bodyOpacity < 0.99) this.vehicle.setBodyOpacity(this.bodyOpacity);
+      this.scene.add(this.vehicle.root);
+      this.scene.add(this.vehicle.glass.mesh);
+      this.scene.add(this.vehicle.fluids.group);
+      this.rain.attachToVehicle(this.vehicle.root);
+      this.buildLatticeOverlay();
+      this.renderDirty = true;
+      this.reset(0, 0, 0, 0);
+      this.vehicle.render(1, 0);
+      this.updateCamera(0.016);
+      this.updateShadowLight();
+      if (this.showLattice) this.updateLatticeOverlay();
+      this.renderer.render(this.scene, this.camera);
+      onProgress?.('Vehicle Spawned', 100);
+      console.timeEnd(totalTag);
+      return;
+    }
+
     const memHit = this.memSkinCache.get(cacheKey);
     const cachePromise = memHit ? Promise.resolve(null) : loadCachedSkinning(cacheKey);
 
@@ -1186,9 +1433,18 @@ export class EngineCore {
         const bytes = resolvedUrl.startsWith('/')
           ? await fetchLocalModelChunked(resolvedUrl, 14, 42, onProgress)
           : await (async () => {
-              const res = await fetch(resolvedUrl, { cache: 'no-cache' });
+              const cached = await getCachedAssetBytes(resolvedUrl);
+              if (cached && cached.byteLength >= 12 && cached[0] !== 0x3c) {
+                onProgress?.('Loaded 3D Mesh from local cache…', 42);
+                return cached;
+              }
+              const res = await fetch(resolvedUrl, { cache: 'default' });
               if (!res.ok) throw new Error(`HTTP ${res.status} while fetching "${resolvedUrl}"`);
-              return new Uint8Array(await res.arrayBuffer());
+              const fetched = new Uint8Array(await res.arrayBuffer());
+              if (fetched.byteLength >= 12 && fetched[0] !== 0x3c) {
+                void putCachedAssetBytes(resolvedUrl, fetched);
+              }
+              return fetched;
             })();
         if (bytes.byteLength < 12) {
           throw new Error(`Empty or truncated GLB response (${bytes.byteLength} bytes) from "${resolvedUrl}"`);
@@ -1413,15 +1669,24 @@ export class EngineCore {
     onProgress?.('Spawning vehicle in arena…', 96);
     await yieldFrame();
 
-    // Atomic swap: dispose old vehicle only now that the new vehicle is 100% ready & bound
-    this.vehicle.dispose();
+    // Atomic swap: park old vehicle in bounded LRU cache (auto-disposes oldest if over RAM limit) so switching back takes < 5 ms!
+    if (this.activeCacheKey && this.activeCacheKey !== cacheKey) {
+      this.scene.remove(this.vehicle.root);
+      this.scene.remove(this.vehicle.glass.mesh);
+      this.scene.remove(this.vehicle.fluids.group);
+      this.vehicleTemplateCache.set(this.activeCacheKey, this.vehicle);
+    } else {
+      this.vehicle.dispose();
+    }
     this.vehicle = nextVehicle;
-    this.vehicle.solver.substeps = this.constrained ? 10 : 12;
+    this.activeCacheKey = cacheKey;
+    this.vehicle.solver.substeps = this.loop.maxSubstepsPerFrame;
     this.vehicle.root.visible = true;
     if (this.currentSettings) {
       this.vehicle.steeringSensitivity = this.currentSettings.steeringSensitivity;
       this.vehicle.absEnabled = this.currentSettings.absEnabled;
       this.vehicle.tcsEnabled = this.currentSettings.tcsEnabled;
+      this.vehicle.transmissionMode = this.currentSettings.transmissionMode;
     }
     this.sound.setProfileFromCarName(this.vehicle.name);
     this.activeCarId = carId;
@@ -1435,20 +1700,69 @@ export class EngineCore {
     this.scene.add(this.vehicle.root);
     this.scene.add(this.vehicle.glass.mesh);
     this.scene.add(this.vehicle.fluids.group);
+    this.rain.attachToVehicle(this.vehicle.root);
     this.buildLatticeOverlay();
+    this.renderDirty = true;
     this.reset(0, 0, 0, 0);
 
-    // Force-upload shaders & textures and render the spawned car before dismissing the loading screen
+    // Pre-compile shaders & upload vehicle textures via renderer.compile() to eliminate first-frame stutter
     this.vehicle.render(1, 0);
     this.updateCamera(0.016);
     this.updateShadowLight();
     if (this.showLattice) this.updateLatticeOverlay();
+    this.renderer.compile(this.scene, this.camera);
     this.renderer.render(this.scene, this.camera);
-    await yieldFrame();
     await yieldFrame();
     if (gen !== this.loadGeneration) return;
 
     onProgress?.('Vehicle Spawned', 100);
+    this.scheduleSecondaryPreload();
+  }
+
+  /**
+   * Staggered low-priority background preloading for secondary vehicles into AssetCache
+   * using requestIdleCallback (never blocks active gameplay or saves data on metered connections).
+   */
+  private scheduleSecondaryPreload(): void {
+    if (this.secondaryPreloadScheduled) return;
+    this.secondaryPreloadScheduled = true;
+    const nav = navigator as Navigator & { connection?: { saveData?: boolean } };
+    if (nav.connection?.saveData) return;
+
+    const urls: string[] = [];
+    for (const c of GITHUB_CARS) {
+      if (c.id === this.activeCarId) continue;
+      const localUrl = c.remoteUrls.find((u) => u.startsWith('/'));
+      if (localUrl) urls.push(localUrl);
+    }
+    if (urls.length === 0) return;
+
+    const scheduleIdle = (fn: () => void, delayMs: number) => {
+      const w = window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number };
+      setTimeout(() => {
+        if (w.requestIdleCallback) w.requestIdleCallback(fn, { timeout: 4000 });
+        else fn();
+      }, delayMs);
+    };
+
+    urls.forEach((url: string, idx: number) => {
+      scheduleIdle(() => {
+        void (async () => {
+          try {
+            const existing = await getCachedAssetBytes(url);
+            if (existing && existing.byteLength >= 12) return;
+            const res = await fetch(url, { priority: 'low' } as RequestInit);
+            if (!res.ok) return;
+            const bytes = new Uint8Array(await res.arrayBuffer());
+            if (bytes.byteLength >= 12 && bytes[0] !== 0x3c) {
+              await putCachedAssetBytes(url, bytes);
+            }
+          } catch {
+            // non-fatal background cache warm-up
+          }
+        })();
+      }, 3500 + idx * 4500);
+    });
   }
 
   private getSkinningWorker(): Worker | null {
@@ -1525,7 +1839,7 @@ export class EngineCore {
     this.vehicle.dispose();
     this.vehicle = new SoftBodyVehicle(src, this.arena);
     const isLowPerf = this.isMobilePhone || this.currentSettings?.resolutionMode === 'low';
-    this.vehicle.solver.substeps = isLowPerf ? 4 : this.constrained ? 8 : 12;
+    this.vehicle.solver.substeps = this.loop.maxSubstepsPerFrame;
     this.vehicle.deformer.lowQualityNormals = isLowPerf;
     this.vehicle.root.visible = true;
     if (this.currentSettings) {
@@ -1538,7 +1852,9 @@ export class EngineCore {
     this.scene.add(this.vehicle.root);
     this.scene.add(this.vehicle.glass.mesh);
     this.scene.add(this.vehicle.fluids.group);
+    this.rain.attachToVehicle(this.vehicle.root);
     this.buildLatticeOverlay();
+    this.renderDirty = true;
     this.reset(0, 0, 0, 0);
   }
 
@@ -1617,6 +1933,7 @@ export class EngineCore {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h, false);
+    this.renderDirty = true;
   }
 
   dispose(): void {
@@ -1628,6 +1945,8 @@ export class EngineCore {
       this.skinningWorker = null;
     }
     this.memSkinCache.clear();
+    this.vehicleTemplateCache.clear();
+    this.rain.dispose();
     this.vehicle.dispose();
     this.arena.dispose();
     if (this.latticeLines) {

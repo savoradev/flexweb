@@ -87,7 +87,7 @@ export function App(): React.ReactElement {
   const initialCars: CarOption[] = [
     ...GITHUB_CAR_OPTIONS,
     ...discoverPublicCars()
-      .filter((c) => !/(bmw_m4csl|dodge_challenger_srt_demon)\.glb$/i.test(c.url))
+      .filter((c) => !/(bmw_m4_f82|dodge_challenger_srt_demon)\.glb$/i.test(c.url))
       .map((c) => ({ id: c.id, name: c.name, url: c.url, bytes: c.bytes })),
   ];
   const [carOptions, setCarOptions] = useState<CarOption[]>(initialCars);
@@ -416,7 +416,7 @@ export function App(): React.ReactElement {
       if (disposed || bootSeq !== loadSeqRef.current) return;
 
       const discovered = discoveredRaw.filter(
-        (c) => !/(bmw_m4csl|dodge_challenger_srt_demon)\.glb$/i.test(c.url),
+        (c) => !/(bmw_m4_f82|dodge_challenger_srt_demon)\.glb$/i.test(c.url),
       );
       const publicIds = new Set(discovered.map((c) => c.id));
       const publicNames = new Set(discovered.map((c) => c.name.toLowerCase()));
@@ -722,7 +722,7 @@ export function App(): React.ReactElement {
         <MainMenu
           mode={screen === 'maps' ? 'maps' : 'home'}
           slides={menuSlides}
-          activeCarName={chosenCar?.name.replace(/\s*\((public\/|Saved)\)$/i, '') ?? 'BMW M4 CSL'}
+          activeCarName={chosenCar?.name.replace(/\s*\((public\/|Saved)\)$/i, '') ?? 'BMW M4 F82'}
           fps={stats?.fps ?? 60}
           onOpenMaps={() => { engineRef.current?.unlockAudio(); setScreen('maps'); }}
           onOpenCars={() => { engineRef.current?.unlockAudio(); setReturnScreen('menu'); setScreen('cars'); }}

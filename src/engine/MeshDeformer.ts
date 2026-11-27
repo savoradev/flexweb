@@ -238,8 +238,8 @@ export class MeshDeformer {
     const usedSet = new Set<number>();
 
     // Build compact 3D spatial hash grid over candidate nodes for O(1) per-vertex nearest-node queries
-    const useGrid = candidates.length > 10;
-    const invCell = 1 / 0.55;
+    const useGrid = candidates.length > 8;
+    const invCell = 1 / 0.72;
     const grid = useGrid ? new Map<number, number[]>() : null;
     if (grid) {
       for (let c = 0; c < candidates.length; c++) {
@@ -264,6 +264,7 @@ export class MeshDeformer {
         const bx = Math.floor(x * invCell) + 512;
         const by = Math.floor(y * invCell) + 512;
         const bz = Math.floor(z * invCell) + 512;
+        // Ring 1 (3x3x3 neighborhood)
         for (let ox = -1; ox <= 1; ox++) {
           const cx = (bx + ox) & 0x3ff;
           for (let oy = -1; oy <= 1; oy++) {
@@ -280,6 +281,30 @@ export class MeshDeformer {
                 let k = 4;
                 while (k > 0 && bestD[k - 1] > d) { bestD[k] = bestD[k - 1]; bestI[k] = bestI[k - 1]; k--; }
                 bestD[k] = d; bestI[k] = ni;
+              }
+            }
+          }
+        }
+        // Adaptive Ring 2 expansion (outer shell of 5x5x5) if fewer than 5 nodes in Ring 1
+        if (found < 5) {
+          for (let ox = -2; ox <= 2; ox++) {
+            const cx = (bx + ox) & 0x3ff;
+            for (let oy = -2; oy <= 2; oy++) {
+              const cy = ((by + oy) & 0x3ff) * 1024;
+              for (let oz = -2; oz <= 2; oz++) {
+                if (Math.abs(ox) <= 1 && Math.abs(oy) <= 1 && Math.abs(oz) <= 1) continue;
+                const cell = grid.get(cx + cy + ((bz + oz) & 0x3ff) * 1048576);
+                if (!cell) continue;
+                for (let m = 0; m < cell.length; m++) {
+                  const ni = cell[m];
+                  const dx = restLocal[ni * 3] - x, dy = restLocal[ni * 3 + 1] - y, dz = restLocal[ni * 3 + 2] - z;
+                  const d = dx * dx + dy * dy + dz * dz;
+                  found++;
+                  if (d >= bestD[4]) continue;
+                  let k = 4;
+                  while (k > 0 && bestD[k - 1] > d) { bestD[k] = bestD[k - 1]; bestI[k] = bestI[k - 1]; k--; }
+                  bestD[k] = d; bestI[k] = ni;
+                }
               }
             }
           }

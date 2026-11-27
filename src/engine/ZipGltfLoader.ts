@@ -1,6 +1,7 @@
 import { LoadingManager, Object3D } from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { createManagedGltfLoader, getSharedGltfLoader } from './SharedGltfLoader';
 import { unzipSync } from 'fflate';
+import { getCachedAssetBytes, putCachedAssetBytes } from './AssetCache';
 
 /**
  * ZipGltfLoader
@@ -28,18 +29,11 @@ export interface RemoteCarPreset {
 
 export const GITHUB_CARS: RemoteCarPreset[] = [
   {
-    id: 'github-bmw-m4csl',
-    name: 'BMW M4 CSL',
+    id: 'github-bmw-m4-f82',
+    name: 'BMW M4 F82',
     remoteUrls: [
-      '/models/bmw_m4csl.glb',
+      '/models/bmw_m4_f82.glb',
     ],
-    attribution: {
-      title: 'BMW M4csl',
-      modelUrl: 'https://skfb.ly/oK68G',
-      author: 'Mpgs.studio3DModels',
-      licenseName: 'Creative Commons Attribution',
-      licenseUrl: 'http://creativecommons.org/licenses/by/4.0/',
-    },
   },
   {
     id: 'github-dodge-demon',
@@ -192,6 +186,15 @@ export async function fetchLocalModelChunked(
   onProgress?: (step: string, pct: number) => void,
 ): Promise<Uint8Array> {
   const fileName = url.split('/').pop() || 'model.glb';
+
+  // 1. Check versioned persistent local cache (Cache Storage -> IndexedDB fallback) first
+  const cached = await getCachedAssetBytes(url);
+  if (cached && cached.byteLength >= 12 && cached[0] !== 0x3c) {
+    console.info(`[FlexWeb Cache] HIT (${formatMB(cached.byteLength)}): ${url}`);
+    onProgress?.(`Loaded ${fileName} from cache (${formatMB(cached.byteLength)})`, pctEnd);
+    return cached;
+  }
+
   const metaRes = await fetch(`/api/model-chunk?path=${encodeURIComponent(url)}&meta=1`, { cache: 'no-cache' }).catch(() => null);
   if (metaRes && metaRes.ok) {
     const meta = (await metaRes.json()) as { ok?: boolean; size?: number };
@@ -219,6 +222,10 @@ export async function fetchLocalModelChunked(
         const pct = Math.round(pctStart + frac * (pctEnd - pctStart));
         onProgress?.(`Loading ${fileName}… ${formatMB(offset)} / ${formatMB(total)}`, pct);
       }
+      // Persist cloned binary in Cache Storage / IndexedDB for instant future reloads (quota-safe)
+      if (out.byteLength >= 12 && out[0] !== 0x3c) {
+        void putCachedAssetBytes(url, out);
+      }
       return out;
     }
   }
@@ -228,7 +235,11 @@ export async function fetchLocalModelChunked(
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} while fetching "${url}"`);
   }
-  return readResponseWithProgress(res, fileName, pctStart, pctEnd, onProgress);
+  const bytes = await readResponseWithProgress(res, fileName, pctStart, pctEnd, onProgress);
+  if (bytes.byteLength >= 12 && bytes[0] !== 0x3c) {
+    void putCachedAssetBytes(url, bytes);
+  }
+  return bytes;
 }
 
 /**
@@ -332,7 +343,7 @@ async function parseGltfWithAssets(
   onProgress?.('Parsing 3D Geometry & Textures…', 46);
   await yieldTick();
   try {
-    const loader = new GLTFLoader(manager);
+    const loader = createManagedGltfLoader(manager);
     const gltf = await loader.parseAsync(gltfText, '');
     return gltf.scene;
   } finally {
@@ -394,7 +405,7 @@ export async function parseGltfFromZipBytes(
   if (glbEntry) {
     onProgress?.('Parsing .GLB from archive…', 46);
     await yieldTick();
-    const loader = new GLTFLoader();
+    const loader = getSharedGltfLoader();
     const copy = glbEntry[1].slice().buffer;
     const gltf = await loader.parseAsync(copy, '/');
     return gltf.scene;
@@ -432,7 +443,7 @@ export async function parseGltfFromZipBytes(
         const glbBuf = packGltfAndBinToGlb(text, binEntry[1]);
         onProgress?.('Parsing 3D Geometry…', 48);
         await yieldTick();
-        const loader = new GLTFLoader();
+        const loader = getSharedGltfLoader();
         const gltf = await loader.parseAsync(glbBuf, '');
         return gltf.scene;
       }
@@ -480,7 +491,7 @@ export async function loadRemoteCarWithFallbacks(
       if (cached.kind === 'glb' && cached.bytes) {
         onProgress?.('Parsing cached .GLB mesh…', 44);
         await yieldTick();
-        const loader = new GLTFLoader();
+        const loader = getSharedGltfLoader();
         const gltf = await loader.parseAsync(cached.bytes.slice(0), '/');
         return { scene: gltf.scene, resolvedUrl: cached.resolvedUrl, bytes: cached.totalBytes };
       }
@@ -512,7 +523,7 @@ export async function loadRemoteCarWithFallbacks(
         setSavedResolvedUrl(carId, url);
         onProgress?.('Parsing 3D Mesh…', 46);
         await yieldTick();
-        const loader = new GLTFLoader();
+        const loader = getSharedGltfLoader();
         const basePath = url.substring(0, url.lastIndexOf('/') + 1);
         const ab: ArrayBuffer =
           bytes.buffer instanceof ArrayBuffer && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
@@ -568,7 +579,7 @@ export async function loadRemoteCarWithFallbacks(
         }
         onProgress?.('Parsing 3D Mesh…', 46);
         await yieldTick();
-        const loader = new GLTFLoader();
+        const loader = getSharedGltfLoader();
         loader.setCrossOrigin('anonymous');
         const basePath = url.substring(0, url.lastIndexOf('/') + 1);
         const ab: ArrayBuffer =

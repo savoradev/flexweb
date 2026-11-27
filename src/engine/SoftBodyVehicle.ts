@@ -166,6 +166,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
   readonly restLocal: Float32Array;
 
   autopilotSpeed = 0; // m/s, crash-test cruise control (0 = off)
+  /** Dynamic road wetness (0 = dry, 1 = heavy rain) subtly reducing peak tire friction. */
+  wetness = 0;
 
   // Tuned independent spring-damper suspension & RWD drivetrain parameters
   springK = 48000;
@@ -1463,7 +1465,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       const hbActive = inp.handbrake > 0 && Math.abs(vForward) > 2.5;
       // Front tyres keep slightly stronger bite during handbrake/drift so the nose stays planted for counter-steering
       const driftFrontBoost = (W.front && hbActive) ? 1.10 : 1.0;
-      const mu = this.tireMu * gs.mu * camberPenalty * driftFrontBoost;
+      const wetGrip = 1 - this.wetness * 0.14;
+      const mu = this.tireMu * gs.mu * camberPenalty * driftFrontBoost * wetGrip;
       const Fmax = mu * Fs;
 
       // Progressive Pacejka lateral slip curve (wider controllable drift sweet spot on rear tyres)
@@ -2610,6 +2613,35 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     return T;
   }
 
+  /** Zero-GC helper writing world contact-patch positions & grounded flags for all 4 wheels. */
+  getWheelContactPositions(outPos: Float32Array, outGrounded: Uint8Array): void {
+    const F = this.frame;
+    const S = this.solver;
+    const ox = F[0], oy = F[1], oz = F[2];
+    const Xx = F[3], Xy = F[4], Xz = F[5];
+    const Yx = F[6], Yy = F[7], Yz = F[8];
+    const Zx = F[9], Zy = F[10], Zz = F[11];
+    for (let w = 0; w < 4; w++) {
+      const W = this.wheels[w];
+      if (W.detached || !W.contact) {
+        outGrounded[w] = 0;
+        continue;
+      }
+      outGrounded[w] = 1;
+      const hub = W.hubNode;
+      if (hub >= 0 && hub < S.nodeCount) {
+        outPos[w * 3] = S.px[hub];
+        outPos[w * 3 + 1] = S.py[hub] - W.radius * 0.85;
+        outPos[w * 3 + 2] = S.pz[hub];
+      } else {
+        const lx = W.hardLocal[0], ly = W.hardLocal[1] - W.s - W.radius, lz = W.hardLocal[2];
+        outPos[w * 3] = ox + Xx * lx + Yx * ly + Zx * lz;
+        outPos[w * 3 + 1] = oy + Xy * lx + Yy * ly + Zy * lz;
+        outPos[w * 3 + 2] = oz + Xz * lx + Yz * ly + Zz * lz;
+      }
+    }
+  }
+
   /** Adjusts body mesh transparency (0.15..1.0) for the X-Ray / Physics Inspector overlay. */
   setBodyOpacity(opacity: number): void {
     const clamped = Math.max(0.15, Math.min(1.0, opacity));
@@ -3198,7 +3230,7 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
           const m = new Mesh(cg, useMat);
           m.visible = true;
           m.castShadow = true;
-          m.frustumCulled = false;
+          m.frustumCulled = true;
           spinner.add(m);
         }
         let caliper: Object3D | undefined;
@@ -3211,7 +3243,7 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
             cg.computeBoundingSphere();
             const m = new Mesh(cg, e.mat);
             m.visible = true;
-            m.frustumCulled = false;
+            m.frustumCulled = true;
             caliper.add(m);
           }
         }
@@ -3299,7 +3331,7 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
         sm.roughness = Math.min(sm.roughness ?? 0.08, 0.06);
         sm.envMapIntensity = 1.9;
       }
-      if (/^(Car_?paint|Car_?Paint_?\.?\d*|CARS|carpaint_second)$/i.test(sm.name)) {
+      if (/^(Car_?paint|Car_?Paint_?\.?\d*|CARS|carpaint_second|ARm4_main)$/i.test(sm.name)) {
         const phys = new MeshPhysicalMaterial({
           name: sm.name,
           color: sm.color.clone(),
@@ -3353,7 +3385,7 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
         sm.metalness = 0.92;
         sm.roughness = 0.42;
         sm.envMapIntensity = 1.25;
-      } else if (/Taillights|Red_Light|brake_?light|redglass/i.test(sm.name)) {
+      } else if (/Taillights|Red_Light|brake_?light|redglass|ARm4_taillight|ARm4_chmsl/i.test(sm.name)) {
         sm.emissive?.setHex(0xff1020);
         sm.emissiveIntensity = 0.85;
         taillightMaterials.push(sm);
@@ -3488,12 +3520,21 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
     }
   }
 
-  const hasExplicitFrontBumper = detectedFactoryFrontBumper || bodyEntries.some((e) => /(?:^|\/)(FRONT_BUMPER|g_Bumper_F)(?:\/|$)|(bumper|splitter).*(front|f\b)/i.test(e.path));
-  const hasExplicitRearBumper = detectedFactoryRearBumper || bodyEntries.some((e) => /(?:^|\/)(REAR_BUMPER|g_Diffuser)(?:\/|$)|(bumper|diffuser|valance).*(rear|back|r\b)/i.test(e.path));
-  const hasExplicitHood = detectedFactoryHood || bodyEntries.some((e) => /(?:^|\/)(HOOD|GEO_HOOD|bonnet|frunk)(?:\/|$)/i.test(e.path));
-  const hasExplicitTrunk = detectedFactoryTrunk || bodyEntries.some((e) => /(?:^|\/)(MOTORHOOD|trunk|boot|tailgate|decklid)(?:\/|$)/i.test(e.path));
+  const hasExplicitFrontBumper = detectedFactoryFrontBumper || bodyEntries.some((e) => /(?:^|\/)(FRONT_BUMPER|g_Bumper_F|ARm4_bumper_F)(?:[/_.]|$)|(bumper|splitter).*(front|f\b)/i.test(e.path));
+  const hasExplicitRearBumper = detectedFactoryRearBumper || bodyEntries.some((e) => /(?:^|\/)(REAR_BUMPER|g_Diffuser|ARm4_bumper_R)(?:[/_.]|$)|(bumper|diffuser|valance).*(rear|back|r\b)/i.test(e.path));
+  const hasExplicitHood = detectedFactoryHood || bodyEntries.some((e) => /(?:^|\/)(HOOD|GEO_HOOD|bonnet|frunk|ARm4_hood)(?:[/_.]|$)/i.test(e.path));
+  const hasExplicitTrunk = detectedFactoryTrunk || bodyEntries.some((e) => /(?:^|\/)(MOTORHOOD|trunk|boot|tailgate|decklid|ARm4_trunk)(?:[/_.]|$)/i.test(e.path));
 
   const classifyPath = (p: string): DeformGroup | null => {
+    // BMW M4 (F82) exact factory panel seams / shutlines (ARm4_*)
+    if (/(?:^|\/)ARm4_hood(?:[/_.]|$)/i.test(p)) return DeformGroup.Hood;
+    if (/(?:^|\/)(ARm4_trunk|ARm4_lip_carbon|ARm4_trunklight)(?:[/_.]|$)/i.test(p)) return DeformGroup.Trunk;
+    if (/(?:^|\/)(ARm4_bumper_F|ARm4_grille_carbon|ARm4_splitter_street|ARm4_canards_carbon)(?:[/_.]|$)/i.test(p)) return DeformGroup.BumperF;
+    if (/(?:^|\/)(ARm4_bumper_R|ARm4_bumper_Support|ARm4_rear_diffuser|ARm4_mudflaps_R)(?:[/_.]|$)/i.test(p)) return DeformGroup.BumperR;
+    if (/(?:^|\/)(ARm4_door_L|ARm4_doorpanel_L|ARm4_doorglass_L|ARm4_mirror_L|ARm4_fender_L|ARm4_dender_trim_L|ARm4_fender_trim_L|ARm4_mudflaps_F_L)(?:[/_.]|$)/i.test(p)) return DeformGroup.SideL;
+    if (/(?:^|\/)(ARm4_door_R|ARm4_doorpanel_R|ARm4_doorglass_R|ARm4_mirror_R|ARm4_fender_R|ARm4_fender_trim_R|ARm4_mudflaps_F_R)(?:[/_.]|$)/i.test(p)) return DeformGroup.SideR;
+    if (/(?:^|\/)(ARm4_roof|ARm4_ariel|ARm4_body|ARm4_interior|ARm4_gts_pad|ARm4_windshield|ARm4_backlight|ARm4_sideglass|ARm4_taillight|ARm4_headlight|ARm4_underbody|ARm4_exhaust|ARm4_subframe_R|ARm4_diff|ARm4_driveshaft|ARm4_halfshaft|ARm4_lowerarm|ARm4_upperarm|ARm4_spring_R|ARm4_shock_R|ARm4_hub_F|ARm4_tierod_F|ARm4_transfercase)(?:[/_.]|$)/i.test(p)) return DeformGroup.Body;
+
     if (/(?:^|\/)(HOOD|GEO_HOOD|bonnet|frunk)(?:\/|$)/i.test(p)) return DeformGroup.Hood;
     if (/(?:^|\/)(MOTORHOOD|trunk|boot|tailgate|decklid)(?:\/|$)/i.test(p)) return DeformGroup.Trunk;
     if (/(?:^|\/)(FRONT_BUMPER|g_Bumper_F)(?:\/|$)|(bumper|grille|splitter|lip).*(front|f\b)|(front|f\b).*(bumper|grille|splitter)/i.test(p)) return DeformGroup.BumperF;
@@ -3531,10 +3572,10 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
   const spoilerBox = new Box3();
 
   // Only keep small non-structural cabin fixtures (steering wheel, seats, displays, belts, pedals) rigid.
-  // Structural carbon monocoque/cage, chassis mechanicals, rear diffuser, and door panels MUST deform with the soft-body lattice!
+  // Structural carbon monocoque/cage, full-length interior tubs (ARm4_interior), chassis mechanicals, rear diffuser, and door panels MUST deform with the soft-body lattice!
   const isRigidInteriorEntry = (e: { mat: Material | Material[]; path: string; box: Box3 }): boolean => {
-    if (/(?:^|\/)(REAR_BUMPER|FRONT_BUMPER|g_Diffuser|g_Bumper_F|DOOR_L|DOOR_R|g_Body|WING_0)(?:\/|$)/i.test(e.path)) return false;
-    if (/(?:^|\/)(STEERING_WHEEL|STEER_HR|GEO_Seats|seat|CINTURE_|LED_|DRS_Tag|IPAS_Tag|pedal|console)(?:\/|$)/i.test(e.path)) return true;
+    if (/(?:^|\/)(REAR_BUMPER|FRONT_BUMPER|g_Diffuser|g_Bumper_F|DOOR_L|DOOR_R|g_Body|WING_0|ARm4_door|ARm4_engine|ARm4_hood|ARm4_trunk|ARm4_bumper|ARm4_fender|ARm4_body|ARm4_roof|ARm4_interior)(?:[/_.]|$)/i.test(e.path)) return false;
+    if (/(?:^|\/)(STEERING_WHEEL|STEER_HR|GEO_Seats|seat|CINTURE_|LED_|DRS_Tag|IPAS_Tag|pedal|console|ARm4_seats|ARm4_buckedseat|ARm4_steer|ARm4_signalstalk|ARm4_brakepedal|ARm4_gaspedal|ARm4_needle|ARm4_sunvisor)(?:[/_.]|$)/i.test(e.path)) return true;
     const m = Array.isArray(e.mat) ? e.mat[0] : e.mat;
     const matName = m?.name || '';
     if (/^(INT_DISPLAY|IN_Cinture|INT_Skin|INT_Velvet|INT_Carpet|INT_Cuciture|seat|leather|carpet|alcantara)/i.test(matName)) return true;
@@ -3618,7 +3659,7 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
         p.mesh.geometry.computeBoundingBox();
         p.mesh.geometry.computeBoundingSphere();
         p.mesh.visible = true;
-        p.mesh.frustumCulled = false;
+        p.mesh.frustumCulled = true;
         return p.mesh;
       });
   }
@@ -3633,7 +3674,7 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
     g.computeBoundingBox();
     g.computeBoundingSphere();
     em.visible = true;
-    em.frustumCulled = false;
+    em.frustumCulled = true;
     engineMeshes.push(em);
   }
   for (const dp of engineAssembly.deformable) {
@@ -3651,14 +3692,16 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
     throw new Error(`No renderable meshes produced from GLB model "${name}"`);
   }
 
-  // Ensure valid normals, bounding spheres, visibility, and frustumCulled = false on every mesh
+  // Ensure valid normals, bounding spheres, visibility, and frustumCulled = true on every mesh
+  // Expand deformable part bounding spheres slightly (+2.2m) so hinged/crumpled/detached panels never cull prematurely.
   for (const p of parts) {
     const g = p.mesh.geometry;
     if (!g.getAttribute('normal')) g.computeVertexNormals();
     g.computeBoundingBox();
     g.computeBoundingSphere();
+    if (g.boundingSphere) g.boundingSphere.radius += 2.2;
     p.mesh.visible = true;
-    p.mesh.frustumCulled = false;
+    p.mesh.frustumCulled = true;
   }
   for (const rm of rigidMeshes) {
     const g = rm.geometry;
@@ -3666,7 +3709,7 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
     g.computeBoundingBox();
     g.computeBoundingSphere();
     rm.visible = true;
-    rm.frustumCulled = false;
+    rm.frustumCulled = true;
   }
 
   return {
@@ -3775,11 +3818,13 @@ function mergePreservingIndex(geos: BufferGeometry[]): BufferGeometry {
 
 function makePart(geo: BufferGeometry, mat: Material | Material[], name: string, group: DeformGroup): CarPart {
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  if (geo.boundingSphere) geo.boundingSphere.radius += 2.2;
   const mesh = new Mesh(geo, mat);
   mesh.name = name;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
-  mesh.frustumCulled = false;
+  mesh.frustumCulled = true;
   return { name, group, mesh };
 }
 

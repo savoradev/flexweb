@@ -1,6 +1,7 @@
 export type ShadowQuality = 'off' | 'low' | 'high';
 export type ReflectionQuality = 'off' | 'low' | 'high';
 export type ResolutionMode = 'low' | 'medium' | 'high' | 'ultra';
+export type WeatherMode = 'off' | 'drizzle' | 'heavy';
 export type SpeedUnit = 'kmh' | 'mph';
 export type TransmissionModeSetting = 'auto' | 'semi' | 'manual';
 export type TouchSteeringMode = 'arrows' | 'wheel';
@@ -27,6 +28,7 @@ export interface SimulatorSettings {
   resolutionMode: ResolutionMode;
   drawDistance: number;   // 2200 | 3500 | 5000
   skyboxClouds: boolean;
+  weatherMode: WeatherMode;
 }
 
 export const DEFAULT_SETTINGS: SimulatorSettings = {
@@ -48,6 +50,7 @@ export const DEFAULT_SETTINGS: SimulatorSettings = {
   resolutionMode: 'medium',
   drawDistance: 3500,
   skyboxClouds: true,
+  weatherMode: 'off',
 };
 
 const STORAGE_KEY = 'flexweb_sim_settings_v1';
