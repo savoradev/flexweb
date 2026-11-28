@@ -1382,9 +1382,24 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       }
     }
 
-    // ---- 7-speed transmission & engine damage power loss / misfire / stall
+    // ---- 7-speed transmission, realistic redline rev-limiter fuel cut & engine damage power loss
     const gRatio = this.gear === -1 ? 3.1 : GEAR_RATIOS[Math.max(0, Math.min(6, this.autoGear - 1))];
-    const rpmNorm = Math.max(0, Math.min(1, (this.engineRpm - 850) / 6650));
+    const isSupercar = this.profile.width > 1.98 && this.profile.height < 1.25;
+    const isMuscle = this.totalMass > 1750;
+    const baseRedline = isSupercar ? 8000 : isMuscle ? 6800 : 7600;
+    const effectiveRedline = baseRedline * Math.max(0.45, 1 - this.engineDmg * 0.42);
+    const rpmScale = isSupercar ? 3.2 : isMuscle ? 2.75 : 2.95;
+    const wheelRpmNow = (Math.abs(vForward) / Math.max(0.25, this.profile.wheelRadius)) * (60 / (2 * Math.PI));
+    const coupledRpmNow = 850 + wheelRpmNow * gRatio * rpmScale;
+    const peakRpmNow = Math.max(this.engineRpm, coupledRpmNow);
+
+    // Realistic hard rev-limiter: tapers fuel over the last 180 RPM and cuts to 0 drive force at redline!
+    let revLimitFactor = 1.0;
+    if (peakRpmNow >= effectiveRedline - 180) {
+      revLimitFactor = Math.max(0, (effectiveRedline - peakRpmNow) / 180);
+    }
+
+    const rpmNorm = Math.max(0, Math.min(1, (this.engineRpm - 850) / Math.max(1000, effectiveRedline - 850)));
     const torqueCurve = 0.68 + 0.36 * Math.sin(rpmNorm * Math.PI * 0.92);
     const clutchFactor = this.shiftTimer > 0 ? 0.08 : this.shiftKickTimer > 0 ? 1.18 : 1.0;
     // Engine damage genuinely degrades acceleration, causes misfiring above 35%, and stalls completely at >= 82%
@@ -1403,7 +1418,11 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       this.maxDriveForce * Math.max(0.15, enginePowerFactor),
       ((this.enginePower * enginePowerFactor) / Math.max(4.5, Math.abs(vForward))) * torqueCurve * Math.min(1.25, 0.62 + gRatio * 0.22),
     );
-    let driveForce = drive * rawDrive * clutchFactor * (this.gear === -1 ? 0.48 : 1);
+    let driveForce = drive * rawDrive * clutchFactor * revLimitFactor * (this.gear === -1 ? 0.48 : 1);
+    // Over-rev engine braking if wheel speed exceeds current gear's redline (e.g. aggressive downshift)
+    if (coupledRpmNow > effectiveRedline + 60 && !this.lateralSledActive) {
+      driveForce -= Math.sign(vForward || this.gear) * Math.min(3600, (coupledRpmNow - effectiveRedline) * 4.5);
+    }
     if (this.gear === 1 && drive < 0.02 && brakeIn < 0.02 && vForward > 2.5 && !this.lateralSledActive) {
       driveForce -= gRatio * (180 + vForward * 14);
     }
@@ -1654,27 +1673,38 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       }
     }
 
-    // Zero-allocation anti-jelly sheet-metal & bumper settling damper
+    // Zero-allocation anti-jelly sheet-metal & bumper settling damper (hood vibrates only during active impact, then settles cleanly!)
     {
       const hoodDetached = this.parts[0].state === 'detached';
       const bfDetached = this.parts[2].state === 'detached';
       const brDetached = this.parts[3].state === 'detached';
+      const activeImpact = S.lastImpact > 1.8;
       const grp = S.group;
       for (let i = 0; i < S.nodeCount; i++) {
         const g = grp[i];
         let kDamp = 0;
         if (g === DeformGroup.Hood && !hoodDetached) {
-          kDamp = 9.0;
+          kDamp = activeImpact ? 11.0 : 34.0;
         } else if (g === DeformGroup.BumperF && !bfDetached) {
-          kDamp = 12.5;
+          kDamp = activeImpact ? 12.5 : 24.0;
         } else if (g === DeformGroup.BumperR && !brDetached) {
-          kDamp = 12.5;
+          kDamp = activeImpact ? 12.5 : 24.0;
         }
         if (kDamp > 0) {
-          const m = S.mass[i] * kDamp;
-          fx[i] -= m * (vx[i] - bvx);
-          fy[i] -= m * (vy[i] - bvy);
-          fz[i] -= m * (vz[i] - bvz);
+          const rvx = vx[i] - bvx;
+          const rvy = vy[i] - bvy;
+          const rvz = vz[i] - bvz;
+          if (!activeImpact && g === DeformGroup.Hood && rvx * rvx + rvy * rvy + rvz * rvz < 0.04) {
+            // Crisp micro-vibration deadband once impact ends so hood rests completely still
+            vx[i] = bvx + rvx * 0.55;
+            vy[i] = bvy + rvy * 0.55;
+            vz[i] = bvz + rvz * 0.55;
+          } else {
+            const m = S.mass[i] * kDamp;
+            fx[i] -= m * rvx;
+            fy[i] -= m * rvy;
+            fz[i] -= m * rvz;
+          }
         }
       }
     }
@@ -1720,8 +1750,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     {
       const ox = F[0], oy = F[1], oz = F[2];
       const R = this.restLocal;
-      if (!this.frontImpacted) {
-        const frontZoneZ = this.profile.frontAxleZ - 0.15;
+      if (!this.frontImpacted && S.lastImpact > 2.2) {
+        const frontZoneZ = this.profile.frontAxleZ + 0.15;
         for (let i = 0; i < S.nodeCount; i++) {
           if (!S.cObstacle[i]) continue;
           const g = S.group[i];
@@ -1739,7 +1769,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         const isRear = grp === DeformGroup.Trunk || grp === DeformGroup.BumperR;
         const isHood = grp === DeformGroup.Hood;
         if (isHood) {
-          if (this.frontImpacted) continue;
+          // After an impact ends, keep velocity-only seat damping active so the hood never rings or oscillates!
+          if (this.frontImpacted && S.lastImpact > 1.8) continue;
         } else if (!isRear) {
           if (S.lastImpact >= 0.8) continue;
           const z = grp === DeformGroup.BumperF ? Zone.Bumper : Zone.Fender;
@@ -1786,7 +1817,7 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       }
     }
 
-    // Hood frontal crash response: V-fold buckle + aerodynamic wind lift when unlatched!
+    // Hood frontal crash response: V-fold buckle ONLY during active impact + aerodynamic wind lift when unlatched!
     if (this.frontImpacted) {
       const hoodPart = this.parts[0];
       const hoodUnlatched = hoodPart.state === 'unlatched';
@@ -1805,7 +1836,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
           }
           const chord = Math.sqrt((px[col[4]] - px[col[0]]) ** 2 + (py[col[4]] - py[col[0]]) ** 2 + (pz[col[4]] - pz[col[0]]) ** 2);
           const kappa = 1 - chord / this.hoodColumnRest[c];
-          if (S.peakImpact > 7.5 && kappa > 0.065 && len > 0) {
+          // Apply V-fold upward buckle ONLY during an active frontal impact (never continuously after the crash!)
+          if (S.lastImpact > 3.5 && kappa > 0.065 && len > 0) {
             const f = Math.min(1, (kappa - 0.065) * 5.2) * 2600;
             fx[col[1]] += Yx * f * 0.6; fy[col[1]] += Yy * f * 0.6; fz[col[1]] += Yz * f * 0.6;
             fx[col[2]] += Yx * f; fy[col[2]] += Yy * f; fz[col[2]] += Yz * f;
@@ -1821,16 +1853,16 @@ export class SoftBodyVehicle implements SubstepForceProvider {
               const restLocalY = R[ni * 3 + 1];
               const curLocalY = (px[ni] - ox) * Yx + (py[ni] - oy) * Yy + (pz[ni] - oz) * Yz;
               const relVy = (vx[ni] - bvx) * Yx + (vy[ni] - bvy) * Yy + (vz[ni] - bvz) * Yz;
-              // Aerodynamic wind lift pushes unlatched hood open as car moves forward
-              let fY = aeroWind * (r / (col.length - 1)) - relVy * 12;
+              // Aerodynamic wind lift pushes unlatched hood open as car moves forward, damped smoothly when stationary
+              let fY = aeroWind * (r / (col.length - 1)) - relVy * 28;
               if (curLocalY < restLocalY - 0.01) {
                 const pen = (restLocalY - 0.01) - curLocalY;
-                fY += pen * 4200 - Math.min(0, relVy) * 140;
+                fY += pen * 4200 - Math.min(0, relVy) * 160;
               }
               const maxOpenY = restLocalY + 0.85 * distFromHinge;
               if (curLocalY > maxOpenY) {
                 const over = curLocalY - maxOpenY;
-                fY -= over * 3400 + Math.max(0, relVy) * 120;
+                fY -= over * 3400 + Math.max(0, relVy) * 140;
               }
               const clampedF = Math.max(-440, Math.min(520, fY));
               fx[ni] += Yx * clampedF;
