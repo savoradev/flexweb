@@ -441,8 +441,10 @@ export function App(): React.ReactElement {
   }, [screen, loadingState]);
 
   const [headlightsOn, setHeadlightsOn] = useState(false);
+  const smoothedRpmRef = useRef(850);
   const hudSpeedRef = useRef<HTMLSpanElement | null>(null);
   const hudGearRef = useRef<HTMLDivElement | null>(null);
+  const hudGForceRef = useRef<HTMLSpanElement | null>(null);
   const hudRpmArcRef = useRef<SVGCircleElement | null>(null);
   const hudNeedleRef = useRef<SVGGElement | null>(null);
   const hudFuelFillRef = useRef<HTMLDivElement | null>(null);
@@ -468,12 +470,16 @@ export function App(): React.ReactElement {
       const spd = Math.round(mph ? tel.speedKmh * 0.621371 : tel.speedKmh);
       if (hudSpeedRef.current) hudSpeedRef.current.textContent = String(spd);
       if (hudGearRef.current) hudGearRef.current.textContent = tel.gear;
-      const rpmFrac = Math.min(1, Math.max(0, tel.rpm / 8200));
+      if (hudGForceRef.current) hudGForceRef.current.textContent = `${tel.gForce.toFixed(1)} G`;
+
+      // Smooth damped stepper-motor needle & arc interpolation (zero jitter)
+      smoothedRpmRef.current += (tel.rpm - smoothedRpmRef.current) * 0.42;
+      const rpmFrac = Math.min(1, Math.max(0, smoothedRpmRef.current / 8000));
       // Circular 240-deg arc (r=54, circumference=339.29, active arc=226.2)
       if (hudRpmArcRef.current) {
         const arcLen = 226.2;
         hudRpmArcRef.current.style.strokeDashoffset = (arcLen * (1 - rpmFrac)).toFixed(1);
-        hudRpmArcRef.current.style.stroke = rpmFrac > 0.84 ? '#ef4444' : rpmFrac > 0.66 ? '#f59e0b' : '#f8fafc';
+        hudRpmArcRef.current.style.stroke = rpmFrac >= 0.875 ? '#dc2626' : rpmFrac >= 0.72 ? '#d97706' : '#e2e8f0';
       }
       if (hudNeedleRef.current) {
         const deg = -120 + rpmFrac * 240;
@@ -1273,20 +1279,14 @@ export function App(): React.ReactElement {
             </div>
           )}
 
-          {/* Top-Right: Precision Motorsport Round Speedometer with Fuel & Engine Temp Gauges */}
+          {/* Bottom-Right: Custom Matte Automotive Telemetry Instrument Cluster (Zero React re-renders per frame) */}
           {settings.showHud && (
-            <footer className="hud-speedo-round">
+            <footer className="hud-speedo-round" aria-label="Vehicle Telemetry Cluster">
               <div className="speedo-dial-wrap">
                 <svg viewBox="0 0 144 144" className="speedo-svg" aria-hidden="true">
-                  <defs>
-                    <radialGradient id="speedoFaceGrad" cx="50%" cy="42%" r="58%">
-                      <stop offset="0%" stopColor="#161b24" />
-                      <stop offset="100%" stopColor="#090c11" />
-                    </radialGradient>
-                  </defs>
-                  {/* Brushed metallic outer bezel + deep dial face */}
-                  <circle cx="72" cy="72" r="68" fill="url(#speedoFaceGrad)" stroke="rgba(255,255,255,0.16)" strokeWidth="2" />
-                  <circle cx="72" cy="72" r="64" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+                  {/* Matte automotive dial face + crisp 1px hairline bezel */}
+                  <circle cx="72" cy="72" r="68" fill="rgba(14, 17, 22, 0.86)" stroke="rgba(255, 255, 255, 0.12)" strokeWidth="1.2" />
+                  <circle cx="72" cy="72" r="62" fill="none" stroke="rgba(255, 255, 255, 0.045)" strokeWidth="0.8" />
 
                   {/* Background RPM track (240° sweep starting at 150°, r=54 -> arcLen=226.2) */}
                   <circle
@@ -1294,85 +1294,88 @@ export function App(): React.ReactElement {
                     cy="72"
                     r="54"
                     fill="none"
-                    stroke="rgba(255, 255, 255, 0.09)"
-                    strokeWidth="6.5"
+                    stroke="rgba(255, 255, 255, 0.08)"
+                    strokeWidth="5"
                     strokeDasharray="226.2 340"
-                    strokeLinecap="round"
+                    strokeLinecap="butt"
                     transform="rotate(150 72 72)"
                   />
-                  {/* Redline zone (7k–8k RPM) */}
+                  {/* Redline zone (7,000–8,000 RPM) */}
                   <circle
                     cx="72"
                     cy="72"
                     r="54"
                     fill="none"
-                    stroke="rgba(239, 68, 68, 0.45)"
-                    strokeWidth="6.5"
-                    strokeDasharray="38 340"
-                    strokeDashoffset="-188.2"
-                    strokeLinecap="round"
+                    stroke="rgba(220, 38, 38, 0.55)"
+                    strokeWidth="5"
+                    strokeDasharray="28.3 340"
+                    strokeDashoffset="-197.9"
+                    strokeLinecap="butt"
                     transform="rotate(150 72 72)"
                   />
-                  {/* Live RPM sweep arc */}
+                  {/* Live damped RPM sweep arc */}
                   <circle
                     ref={hudRpmArcRef}
                     cx="72"
                     cy="72"
                     r="54"
                     fill="none"
-                    stroke="#f8fafc"
-                    strokeWidth="6.5"
+                    stroke="#e2e8f0"
+                    strokeWidth="5"
                     strokeDasharray="226.2 340"
                     strokeDashoffset={(226.2 * (1 - rpmPct / 100)).toFixed(1)}
-                    strokeLinecap="round"
+                    strokeLinecap="butt"
                     transform="rotate(150 72 72)"
                   />
 
-                  {/* Crisp 0–8 RPM graduation ticks & numerals */}
-                  {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
-                    const deg = -120 + (n / 8) * 240;
+                  {/* Crisp major (0..8) & minor (0.5) RPM tick marks */}
+                  {Array.from({ length: 17 }, (_, idx) => {
+                    const val = idx * 0.5;
+                    const isMajor = idx % 2 === 0;
+                    const deg = -120 + (val / 8) * 240;
                     const rad = ((deg - 90) * Math.PI) / 180;
-                    const x1 = 72 + Math.cos(rad) * 47;
-                    const y1 = 72 + Math.sin(rad) * 47;
-                    const x2 = 72 + Math.cos(rad) * 53;
-                    const y2 = 72 + Math.sin(rad) * 53;
-                    const tx = 72 + Math.cos(rad) * 39;
-                    const ty = 72 + Math.sin(rad) * 39 + 2.8;
-                    const isRed = n >= 7;
+                    const innerR = isMajor ? 46.5 : 49.5;
+                    const outerR = 52.5;
+                    const x1 = 72 + Math.cos(rad) * innerR;
+                    const y1 = 72 + Math.sin(rad) * innerR;
+                    const x2 = 72 + Math.cos(rad) * outerR;
+                    const y2 = 72 + Math.sin(rad) * outerR;
+                    const isRed = val >= 7.0;
                     return (
-                      <g key={n}>
+                      <g key={idx}>
                         <line
                           x1={x1.toFixed(1)}
                           y1={y1.toFixed(1)}
                           x2={x2.toFixed(1)}
                           y2={y2.toFixed(1)}
-                          stroke={isRed ? '#ef4444' : 'rgba(241,245,249,0.58)'}
-                          strokeWidth={n % 2 === 0 ? '1.8' : '1.2'}
-                          strokeLinecap="round"
+                          stroke={isRed ? '#dc2626' : isMajor ? 'rgba(226,232,240,0.68)' : 'rgba(226,232,240,0.28)'}
+                          strokeWidth={isMajor ? '1.5' : '0.9'}
                         />
-                        <text
-                          x={tx.toFixed(1)}
-                          y={ty.toFixed(1)}
-                          textAnchor="middle"
-                          fill={isRed ? '#f87171' : 'rgba(226,232,240,0.62)'}
-                          fontSize="7.5"
-                          fontWeight="700"
-                          fontFamily="JetBrains Mono, monospace"
-                        >
-                          {n}
-                        </text>
+                        {isMajor && (
+                          <text
+                            x={(72 + Math.cos(rad) * 38.5).toFixed(1)}
+                            y={(72 + Math.sin(rad) * 38.5 + 2.6).toFixed(1)}
+                            textAnchor="middle"
+                            fill={isRed ? '#ef4444' : 'rgba(203,213,225,0.65)'}
+                            fontSize="7.2"
+                            fontWeight="600"
+                            fontFamily="JetBrains Mono, monospace"
+                          >
+                            {val}
+                          </text>
+                        )}
                       </g>
                     );
                   })}
 
-                  {/* Tapered motorsport tachometer needle */}
+                  {/* Tapered damped motorsport needle + matte hub cap */}
                   <g
                     ref={hudNeedleRef}
                     className="speedo-needle-group"
                     style={{ transform: `rotate(${(-120 + (rpmPct / 100) * 240).toFixed(1)}deg)` }}
                   >
-                    <polygon points="70.6,72 73.4,72 72.5,20 71.5,20" fill="#f97316" />
-                    <circle cx="72" cy="72" r="5.5" fill="#1e2430" stroke="#f97316" strokeWidth="2" />
+                    <polygon points="71.0,74 73.0,74 72.3,19 71.7,19" fill="#ea580c" />
+                    <circle cx="72" cy="72" r="4.5" fill="#0e1116" stroke="rgba(255,255,255,0.28)" strokeWidth="1.2" />
                   </g>
                 </svg>
 
@@ -1387,7 +1390,7 @@ export function App(): React.ReactElement {
                 </div>
               </div>
 
-              {/* Integrated Fuel & Engine Temp Gauges */}
+              {/* Compact Matte Telemetry Strip: Fuel, Engine Temp, Live G-Force & FPS */}
               <div className="speedo-subgauges">
                 <div className="subgauge-row">
                   <span className="subgauge-lbl">FUEL</span>
@@ -1416,8 +1419,10 @@ export function App(): React.ReactElement {
                   </span>
                 </div>
                 <div className="speedo-fps-row">
-                  <span>FPS</span>
-                  <span ref={hudFpsRef}>{Math.round(stats?.fps ?? 60)}</span>
+                  <span ref={hudGForceRef}>{(t?.gForce ?? 0).toFixed(1)} G</span>
+                  <span>
+                    <span ref={hudFpsRef}>{Math.round(stats?.fps ?? 60)}</span> FPS
+                  </span>
                 </div>
               </div>
             </footer>
