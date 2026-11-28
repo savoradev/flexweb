@@ -193,10 +193,9 @@ export class EngineCore {
   private latticeCol: Float32Array | null = null;
 
   private statsTimer = 0;
-  private hudTimer = 0;
   private loggedDrawCalls = false;
   private onStats?: (s: EngineStats) => void;
-  onHudFrame?: (tel: VehicleTelemetry, fps: number) => void;
+  onHudFrame?: (tel: VehicleTelemetry, fps: number, dt: number) => void;
   private resizeObserver: ResizeObserver;
   private skinningWorker: Worker | null = null;
   private workerReqId = 1;
@@ -759,11 +758,9 @@ export class EngineCore {
     this.arena.updateRadarDisplay(FNow[0], FNow[2], liveTel.speedKmh);
     this.sound.update(liveTel, frameDt, this.loop.paused || this.menuDemoMode, this.loop.timeScale);
 
-    // Throttled 10 Hz direct DOM HUD update (speed, gear, RPM, G-force, FPS — zero React reconciliation!)
-    this.hudTimer += frameDt;
-    if (this.onHudFrame && this.hudTimer >= 0.10) {
-      this.hudTimer = 0;
-      this.onHudFrame(liveTel, this.loop.fps);
+    // Full frame-rate direct DOM HUD update (needles, speed, RPM, gear — zero React reconciliation!)
+    if (this.onHudFrame) {
+      this.onHudFrame(liveTel, this.loop.fps, frameDt);
     }
 
     // Throttled 4 Hz React stats sync (diagnostics bars & damage telemetry only)

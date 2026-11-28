@@ -455,9 +455,9 @@ export function App(): React.ReactElement {
     if (!el) return;
     const bootSeq = ++loadSeqRef.current;
     const engine = new EngineCore(el, (s) => setStats({ ...s }));
-    engine.onHudFrame = (tel, fps) => {
+    engine.onHudFrame = (tel, fps, dt) => {
       const mph = settingsRef.current.speedUnit === 'mph';
-      clusterRef.current?.update(tel, fps, mph);
+      clusterRef.current?.update(tel, fps, mph, dt);
     };
     engineRef.current = engine;
     (window as unknown as { __flexweb?: EngineCore }).__flexweb = engine;

@@ -2,7 +2,7 @@ import { forwardRef, useImperativeHandle, useRef } from 'react';
 import type { VehicleTelemetry } from '../engine/SoftBodyVehicle';
 
 export interface MotorsportClusterHandle {
-  update(tel: VehicleTelemetry, fps: number, mph: boolean): void;
+  update(tel: VehicleTelemetry, fps: number, mph: boolean, dt?: number): void;
 }
 
 interface MotorsportClusterProps {
@@ -19,12 +19,31 @@ const SPD_SWEEP_DEG = 270; // 0 -> 300 km/h (or 0 -> 200 mph) arc on right pod
  * - Left pod: Analog Tachometer (0–7/8 x1000 RPM, redline band, orange needle, digital RPM box)
  * - Right pod: Large Analog Speedometer (0–300 km/h with red minor ticks, red needle, digital speed box)
  * - Bottom telemetry strip: Gear, Temp, Throttle, Brake, ABS, Fuel, G-Force, Lights, FPS
- * - 100% direct DOM/SVG ref updates inside `update()` -> zero React re-renders per frame!
+ * - 100% direct DOM/SVG ref updates inside `update()` at full frame rate -> zero React re-renders!
  */
 export const MotorsportCluster = forwardRef<MotorsportClusterHandle, MotorsportClusterProps>(
   function MotorsportCluster({ speedUnitLabel }, ref) {
     const smoothRpm = useRef(850);
     const smoothSpd = useRef(0);
+    const slowTextTimer = useRef(0);
+    const lastText = useRef({
+      rpm: '',
+      spd: '',
+      unit: '',
+      gear: '',
+      temp: '',
+      tempHot: false,
+      thr: '',
+      brk: '',
+      abs: '',
+      absOn: false,
+      fuel: '',
+      fuelLow: false,
+      g: '',
+      hl: '',
+      hlOn: false,
+      fps: '',
+    });
 
     const rpmNeedleRef = useRef<SVGGElement | null>(null);
     const spdNeedleRef = useRef<SVGGElement | null>(null);
@@ -43,56 +62,109 @@ export const MotorsportCluster = forwardRef<MotorsportClusterHandle, MotorsportC
     const fpsRef = useRef<HTMLSpanElement | null>(null);
 
     useImperativeHandle(ref, () => ({
-      update(tel: VehicleTelemetry, fps: number, mph: boolean) {
+      update(tel: VehicleTelemetry, fps: number, mph: boolean, dt = 1 / 60) {
+        const clampedDt = Math.min(0.05, Math.max(0.001, dt));
         const rawSpeed = mph ? tel.speedKmh * 0.621371 : tel.speedKmh;
         const maxScale = mph ? 200 : 300;
 
-        // Smooth stepper-motor needle damping
-        smoothRpm.current += (tel.rpm - smoothRpm.current) * 0.42;
-        smoothSpd.current += (rawSpeed - smoothSpd.current) * 0.40;
+        // Frame-rate-independent snappy damping (~35ms response time: instant feel, zero jitter)
+        const rpmAlpha = 1 - Math.exp(-32 * clampedDt);
+        const spdAlpha = 1 - Math.exp(-28 * clampedDt);
+        smoothRpm.current += (tel.rpm - smoothRpm.current) * rpmAlpha;
+        smoothSpd.current += (rawSpeed - smoothSpd.current) * spdAlpha;
 
         const rpmFrac = Math.min(1, Math.max(0, smoothRpm.current / 7500));
         const spdFrac = Math.min(1, Math.max(0, smoothSpd.current / maxScale));
 
         if (rpmNeedleRef.current) {
           const deg = RPM_START_DEG + rpmFrac * RPM_SWEEP_DEG;
-          rpmNeedleRef.current.style.transform = `rotate(${deg.toFixed(1)}deg)`;
+          rpmNeedleRef.current.style.transform = `rotate(${deg.toFixed(2)}deg)`;
         }
         if (spdNeedleRef.current) {
           const deg = SPD_START_DEG + spdFrac * SPD_SWEEP_DEG;
-          spdNeedleRef.current.style.transform = `rotate(${deg.toFixed(1)}deg)`;
+          spdNeedleRef.current.style.transform = `rotate(${deg.toFixed(2)}deg)`;
         }
-        if (rpmDigitsRef.current) {
-          rpmDigitsRef.current.textContent = String(Math.round(tel.rpm));
+
+        const c = lastText.current;
+
+        const rpmStr = String(Math.round(tel.rpm));
+        if (rpmDigitsRef.current && c.rpm !== rpmStr) {
+          c.rpm = rpmStr;
+          rpmDigitsRef.current.textContent = rpmStr;
         }
-        if (spdDigitsRef.current) {
-          spdDigitsRef.current.textContent = rawSpeed.toFixed(1);
+        const spdStr = rawSpeed.toFixed(1);
+        if (spdDigitsRef.current && c.spd !== spdStr) {
+          c.spd = spdStr;
+          spdDigitsRef.current.textContent = spdStr;
         }
-        if (spdUnitRef.current) {
-          spdUnitRef.current.textContent = mph ? 'MPH' : 'KM/H';
+        const unitStr = mph ? 'MPH' : 'KM/H';
+        if (spdUnitRef.current && c.unit !== unitStr) {
+          c.unit = unitStr;
+          spdUnitRef.current.textContent = unitStr;
         }
-        if (gearRef.current) gearRef.current.textContent = tel.gear;
-        if (tempRef.current) {
-          tempRef.current.textContent = `${tel.mech.engineTemp}°C`;
-          tempRef.current.classList.toggle('alert-red', tel.mech.engineTemp >= 110);
+        if (gearRef.current && c.gear !== tel.gear) {
+          c.gear = tel.gear;
+          gearRef.current.textContent = tel.gear;
         }
-        if (thrRef.current) thrRef.current.textContent = `${Math.round(tel.throttle * 100)}%`;
-        if (brkRef.current) brkRef.current.textContent = `${Math.round(tel.brake * 100)}%`;
-        if (absRef.current) {
+
+        const thrStr = `${Math.round(tel.throttle * 100)}%`;
+        if (thrRef.current && c.thr !== thrStr) {
+          c.thr = thrStr;
+          thrRef.current.textContent = thrStr;
+        }
+        const brkStr = `${Math.round(tel.brake * 100)}%`;
+        if (brkRef.current && c.brk !== brkStr) {
+          c.brk = brkStr;
+          brkRef.current.textContent = brkStr;
+        }
+        if (absRef.current && c.absOn !== tel.absActive) {
+          c.absOn = tel.absActive;
           absRef.current.textContent = tel.absActive ? 'ON' : 'OFF';
           absRef.current.classList.toggle('alert-red', tel.absActive);
         }
-        if (fuelRef.current) {
+
+        // Throttle slower-changing telemetry cells (TEMP, FUEL, G-FORCE, LIGHTS, FPS) to ~12 Hz for readability
+        slowTextTimer.current += clampedDt;
+        if (slowTextTimer.current >= 0.08) {
+          slowTextTimer.current = 0;
+
+          const tempStr = `${tel.mech.engineTemp}°C`;
+          const tempHot = tel.mech.engineTemp >= 110;
+          if (tempRef.current && (c.temp !== tempStr || c.tempHot !== tempHot)) {
+            c.temp = tempStr;
+            c.tempHot = tempHot;
+            tempRef.current.textContent = tempStr;
+            tempRef.current.classList.toggle('alert-red', tempHot);
+          }
+
           const fPct = Math.round(Math.max(0, Math.min(1, tel.mech.fuelLevel)) * 100);
-          fuelRef.current.textContent = `${fPct}%`;
-          fuelRef.current.classList.toggle('alert-amber', fPct <= 18);
+          const fuelStr = `${fPct}%`;
+          const fuelLow = fPct <= 18;
+          if (fuelRef.current && (c.fuel !== fuelStr || c.fuelLow !== fuelLow)) {
+            c.fuel = fuelStr;
+            c.fuelLow = fuelLow;
+            fuelRef.current.textContent = fuelStr;
+            fuelRef.current.classList.toggle('alert-amber', fuelLow);
+          }
+
+          const gStr = `${tel.gForce.toFixed(2)}G`;
+          if (gRef.current && c.g !== gStr) {
+            c.g = gStr;
+            gRef.current.textContent = gStr;
+          }
+
+          if (hlRef.current && c.hlOn !== tel.headlightsOn) {
+            c.hlOn = tel.headlightsOn;
+            hlRef.current.textContent = tel.headlightsOn ? 'ON' : 'OFF';
+            hlRef.current.classList.toggle('alert-blue', tel.headlightsOn);
+          }
+
+          const fpsStr = `${Math.round(fps)}`;
+          if (fpsRef.current && c.fps !== fpsStr) {
+            c.fps = fpsStr;
+            fpsRef.current.textContent = fpsStr;
+          }
         }
-        if (gRef.current) gRef.current.textContent = `${tel.gForce.toFixed(2)}G`;
-        if (hlRef.current) {
-          hlRef.current.textContent = tel.headlightsOn ? 'ON' : 'OFF';
-          hlRef.current.classList.toggle('alert-blue', tel.headlightsOn);
-        }
-        if (fpsRef.current) fpsRef.current.textContent = `${Math.round(fps)}`;
       },
     }), []);
 
@@ -122,13 +194,6 @@ export const MotorsportCluster = forwardRef<MotorsportClusterHandle, MotorsportC
                 <stop offset="0%" stopColor="#24262b" />
                 <stop offset="100%" stopColor="#141518" />
               </radialGradient>
-              <filter id="redNeedleGlow" x="-40%" y="-40%" width="180%" height="180%">
-                <feGaussianBlur stdDeviation="2.2" result="blur" />
-                <feMerge>
-                  <feMergeNode in="blur" />
-                  <feMergeNode in="SourceGraphic" />
-                </feMerge>
-              </filter>
             </defs>
 
             {/* Unified dark matte outer housing silhouette */}
@@ -266,7 +331,6 @@ export const MotorsportCluster = forwardRef<MotorsportClusterHandle, MotorsportC
               <polygon
                 points={`${spdCx - 2.6},${spdCy + 16} ${spdCx + 2.6},${spdCy + 16} ${spdCx + 1.0},${spdCy - 78} ${spdCx - 1.0},${spdCy - 78}`}
                 fill="#ef4444"
-                filter="url(#redNeedleGlow)"
               />
               <circle cx={spdCx} cy={spdCy} r="8.5" fill="#181a1f" stroke="#3f3f46" strokeWidth="1.4" />
             </g>
