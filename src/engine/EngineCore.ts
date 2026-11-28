@@ -140,13 +140,18 @@ export class EngineCore {
   private readonly dirLight: DirectionalLight;
   private readonly gltfLoader = getSharedGltfLoader();
   private readonly skyDome: Mesh;
-  private readonly skyUniforms = { uTime: { value: 0 }, uRain: { value: 0 }, uLightning: { value: 0 } };
+  private readonly skyUniforms = { uTime: { value: 0 }, uRain: { value: 0 }, uLightning: { value: 0 }, uNight: { value: 0 } };
   private lightningTimer = 6.5;
   private lightningFlash = 0;
+  private nightMode = false;
+  private headlightsOn = false;
   private readonly dryHemiSky = new Color(0xeef4ff);
   private readonly wetHemiSky = new Color(0x6e8094);
+  private readonly nightHemiSky = new Color(0x1b2944);
   private readonly drySunCol = new Color(0xfff6e8);
   private readonly wetSunCol = new Color(0xa9bdd4);
+  private readonly nightMoonCol = new Color(0x88a8dc);
+  private readonly nightSkyCol = new Color(0x090e1a);
   private readonly pmrem: PMREMGenerator;
   private readonly studioEnvRT: WebGLRenderTarget;
   private readonly cubeRT: WebGLCubeRenderTarget;
@@ -290,6 +295,7 @@ export class EngineCore {
         uniform float uTime;
         uniform float uRain;
         uniform float uLightning;
+        uniform float uNight;
         varying vec3 vDir;
         float hash(vec2 p) {
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -318,18 +324,33 @@ export class EngineCore {
           vec3 d = normalize(vDir);
           float y = clamp(d.y, 0.0, 1.0);
           float r = clamp(uRain, 0.0, 1.0);
+          float n = clamp(uNight, 0.0, 1.0);
 
-          // Sunny blue sky smoothly transitions into dark overcast storm slate when raining
+          // Sunny blue sky -> dark overcast storm slate when raining -> deep starry midnight in Night Mode
           vec3 zenith = mix(vec3(0.24, 0.46, 0.78), vec3(0.09, 0.12, 0.17), r);
           vec3 horizon = mix(vec3(0.75, 0.84, 0.93), vec3(0.27, 0.31, 0.37), r);
           vec3 ground = mix(vec3(0.45, 0.50, 0.55), vec3(0.16, 0.19, 0.23), r);
+          zenith = mix(zenith, vec3(0.015, 0.025, 0.055), n);
+          horizon = mix(horizon, vec3(0.045, 0.068, 0.12), n);
+          ground = mix(ground, vec3(0.015, 0.02, 0.032), n);
           vec3 col = d.y >= 0.0 ? mix(horizon, zenith, pow(y, 0.58)) : mix(horizon, ground, clamp(-d.y * 4.0, 0.0, 1.0));
 
-          // Warm sun glow fades behind thick storm clouds
+          // Warm sun glow (day) or cool silver moon glow (night)
           vec3 sunDir = normalize(vec3(0.45, 0.62, 0.40));
           float sunDot = max(dot(d, sunDir), 0.0);
-          float sunVis = 1.0 - r * 0.94;
+          float sunVis = (1.0 - r * 0.94) * (1.0 - n);
           col += vec3(1.0, 0.94, 0.82) * (pow(sunDot, 16.0) * 0.22 + pow(sunDot, 180.0) * 0.65) * sunVis;
+          float moonVis = (1.0 - r * 0.85) * n;
+          col += vec3(0.75, 0.86, 1.0) * (pow(sunDot, 36.0) * 0.16 + pow(sunDot, 340.0) * 0.85) * moonVis;
+
+          // Subtle twinkling starfield in clear Night Mode
+          if (n > 0.05 && d.y > 0.06) {
+            vec2 starUv = floor(d.xz / (d.y + 0.25) * 190.0);
+            float sh = hash(starUv);
+            float star = step(0.994, sh) * smoothstep(0.06, 0.32, d.y) * (1.0 - r * 0.92);
+            float twinkle = 0.65 + 0.35 * sin(uTime * 2.4 + sh * 80.0);
+            col += vec3(0.85, 0.92, 1.0) * star * twinkle * n * 0.95;
+          }
 
           // Volumetric clouds thicken, darken & move faster during rain + catch distant sheet lightning
           if (d.y > 0.015) {
@@ -347,9 +368,10 @@ export class EngineCore {
             vec3 sunnyCloud = mix(vec3(0.84, 0.88, 0.93), vec3(1.0, 0.99, 0.96), clamp(c1 * 1.2 + sunDot * 0.25, 0.0, 1.0));
             vec3 stormCloud = mix(vec3(0.17, 0.20, 0.25), vec3(0.36, 0.40, 0.46), clamp(c2 * 1.15, 0.0, 1.0));
             vec3 cloudCol = mix(sunnyCloud, stormCloud, r);
+            cloudCol = mix(cloudCol, vec3(0.055, 0.075, 0.12) + vec3(0.06, 0.08, 0.12) * c1, n);
             // Distant sheet lightning illuminating storm cloud bellies
             cloudCol += vec3(0.78, 0.88, 1.0) * uLightning * smoothstep(0.35, 0.75, c1) * 1.4;
-            col = mix(col, cloudCol, density * horizonFade * mix(0.86, 0.96, r));
+            col = mix(col, cloudCol, density * horizonFade * mix(0.86, 0.96, r) * mix(1.0, 0.65, n));
           }
           gl_FragColor = vec4(col, 1.0);
         }
@@ -422,7 +444,72 @@ export class EngineCore {
     this.loop.start();
   }
 
-  // ================================================================ weather (zero-cost when Off)
+  // ================================================================ weather & time of day
+
+  /** Switch between Day and Night Mode (auto-enables xenon headlights in Night Mode). */
+  setNightMode(night: boolean): void {
+    const prev = this.nightMode;
+    this.nightMode = night;
+    this.skyUniforms.uNight.value = night ? 1 : 0;
+    if (night !== prev) {
+      this.setHeadlights(night);
+      this.mobileReflBaked = false;
+    }
+    this.applyLightingMood(this.rain.intensity);
+    this.renderDirty = true;
+  }
+
+  isNightMode(): boolean {
+    return this.nightMode;
+  }
+
+  /** Toggle or set vehicle headlights (SpotLight beams + emissive lenses + rear running lights). */
+  setHeadlights(on: boolean): void {
+    this.headlightsOn = on;
+    this.vehicle.headlightsOn = on;
+    this.renderDirty = true;
+  }
+
+  toggleHeadlights(): boolean {
+    this.setHeadlights(!this.headlightsOn);
+    return this.headlightsOn;
+  }
+
+  getHeadlights(): boolean {
+    return this.headlightsOn;
+  }
+
+  /** Unified zero-GC Day / Night / Rain / Lightning lighting & fog mood controller. */
+  private applyLightingMood(r: number): void {
+    const flash = this.lightningFlash;
+    if (this.nightMode) {
+      this.dirLight.intensity = 0.34 - r * 0.14 + flash * 1.45;
+      this.dirLight.color.copy(this.nightMoonCol);
+      this.hemiLight.intensity = 0.28 - r * 0.08 + flash * 0.35;
+      this.hemiLight.color.copy(this.nightHemiSky);
+      this.renderer.toneMappingExposure = 0.92;
+      if (this.scene.background instanceof Color) {
+        this.scene.background.copy(this.nightSkyCol);
+      }
+      if (this.scene.fog instanceof FogExp2) {
+        this.scene.fog.color.copy(this.nightSkyCol);
+        this.scene.fog.density = 0.00048 + r * 0.00055;
+      }
+    } else {
+      this.dirLight.intensity = 2.2 - r * 1.42 + flash * 1.65;
+      this.dirLight.color.copy(this.drySunCol).lerp(this.wetSunCol, r);
+      this.hemiLight.intensity = 0.85 - r * 0.30 + flash * 0.45;
+      this.hemiLight.color.copy(this.dryHemiSky).lerp(this.wetHemiSky, r);
+      this.renderer.toneMappingExposure = 1.05 - r * 0.11;
+      if (this.scene.background instanceof Color) {
+        this.scene.background.copy(r > 0.001 ? this.rain.outSkyColor : SKY_COLOR);
+      }
+      if (this.scene.fog instanceof FogExp2) {
+        this.scene.fog.color.copy(r > 0.001 ? this.rain.outSkyColor : SKY_COLOR);
+        this.scene.fog.density = 0.00006 + r * 0.00046;
+      }
+    }
+  }
 
   /** Set weather preset ('off' | 'drizzle' | 'heavy'). */
   setWeatherMode(mode: WeatherMode): void {
@@ -455,11 +542,8 @@ export class EngineCore {
       if (this.skyUniforms.uRain.value > 0) {
         this.skyUniforms.uRain.value = 0;
         this.skyUniforms.uLightning.value = 0;
-        this.dirLight.intensity = 2.2;
-        this.dirLight.color.copy(this.drySunCol);
-        this.hemiLight.intensity = 0.85;
-        this.hemiLight.color.copy(this.dryHemiSky);
-        this.renderer.toneMappingExposure = 1.05;
+        this.lightningFlash = 0;
+        this.applyLightingMood(0);
       }
       return;
     }
@@ -503,21 +587,7 @@ export class EngineCore {
       if (this.lightningFlash < 0.004) this.lightningFlash = 0;
     }
     this.skyUniforms.uLightning.value = this.lightningFlash;
-
-    this.dirLight.intensity = 2.2 - r * 1.42 + this.lightningFlash * 1.65;
-    this.dirLight.color.copy(this.drySunCol).lerp(this.wetSunCol, r);
-    this.hemiLight.intensity = 0.85 - r * 0.30 + this.lightningFlash * 0.45;
-    this.hemiLight.color.copy(this.dryHemiSky).lerp(this.wetHemiSky, r);
-    this.renderer.toneMappingExposure = 1.05 - r * 0.11;
-
-    // Smooth overcast sky & fog tint when raining (reuses pre-allocated Color — zero GC)
-    if (this.scene.background instanceof Color) {
-      this.scene.background.copy(this.rain.outSkyColor);
-    }
-    if (this.scene.fog instanceof FogExp2) {
-      this.scene.fog.color.copy(this.rain.outSkyColor);
-      this.scene.fog.density = 0.00006 + r * 0.00046;
-    }
+    this.applyLightingMood(r);
   }
 
   // ================================================================ loop
@@ -906,6 +976,7 @@ export class EngineCore {
     this.camera.updateProjectionMatrix();
     this.skyDome.visible = s.skyboxClouds;
     this.setWeatherMode(s.weatherMode ?? 'off');
+    this.setNightMode((s.timeOfDay ?? 'day') === 'night');
   }
 
   unlockAudio(): void {
@@ -1265,6 +1336,7 @@ export class EngineCore {
     this.arena.resetDynamic();
     this.rain.reset();
     this.vehicle.spawn(x, z, yaw, speedKmh / 3.6, lateral);
+    this.vehicle.headlightsOn = this.headlightsOn;
     if (speedKmh > 0 && !lateral) this.vehicle.autopilotSpeed = speedKmh / 3.6;
     const F = this.vehicle.getFrame();
     this.camPos.set(F[0] - F[9] * 6.2, F[1] + 2.1, F[2] - F[11] * 6.2);
@@ -1272,6 +1344,20 @@ export class EngineCore {
     this.camVel.set(0, 0, 0);
     this.lastShadowX = Number.NaN;
     this.mobileReflBaked = false;
+    this.renderDirty = true;
+    this.lastResetMs = performance.now() - t0;
+  }
+
+  /** Repairs the vehicle completely in-place at its current world position & heading (no teleport to spawn). */
+  repairInPlace(): void {
+    const t0 = performance.now();
+    const F = this.vehicle.getFrame();
+    const x = F[0];
+    const z = F[2];
+    const yaw = Math.atan2(F[9], F[11]);
+    this.vehicle.spawn(x, z, yaw, 0, false);
+    this.vehicle.headlightsOn = this.headlightsOn;
+    this.lastShadowX = Number.NaN;
     this.renderDirty = true;
     this.lastResetMs = performance.now() - t0;
   }

@@ -3653,3 +3653,432 @@ html[data-device="desktop"] .hud-cluster-minimal {
   55%, 80% { transform: rotate(0deg); }
   100% { transform: rotate(90deg); }
 }
+
+/* ================================================================
+ * Repair-in-Place Button
+ * ================================================================ */
+.btn.btn-repair {
+  border-color: rgba(34, 197, 94, 0.45);
+  color: #86efac;
+}
+.btn.btn-repair:hover {
+  background: rgba(34, 197, 94, 0.16);
+  border-color: rgba(34, 197, 94, 0.78);
+}
+
+/* ================================================================
+ * Bottom-Center Horizontal Vehicle Diagnostics + Live Breakage Alerts
+ * ================================================================ */
+.diag-bottom-center {
+  position: fixed;
+  left: 50%;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 24;
+  pointer-events: none;
+}
+
+.diag-bottom-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.diag-alert-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.diag-alert-pill {
+  padding: 4px 11px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  animation: diag-alert-in 180ms ease-out;
+}
+
+.diag-alert-pill.warn {
+  background: rgba(30, 22, 10, 0.88);
+  border: 1px solid rgba(245, 158, 11, 0.72);
+  color: #fde68a;
+}
+
+.diag-alert-pill.crit {
+  background: rgba(38, 12, 14, 0.92);
+  border: 1px solid rgba(239, 68, 68, 0.82);
+  color: #fecaca;
+}
+
+@keyframes diag-alert-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.diag-horiz-card {
+  position: relative;
+  pointer-events: auto;
+  background: rgba(11, 14, 20, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 6px 14px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.42);
+}
+
+.diag-svg-horiz {
+  width: 176px;
+  height: 76px;
+  display: block;
+}
+
+.diag-horiz-close {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.diag-horiz-close:hover { color: #fff; }
+
+.diag-mini-pill {
+  pointer-events: auto;
+  padding: 5px 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+/* ================================================================
+ * Round Motorsport Speedometer + Fuel & Engine Temp Gauges
+ * ================================================================ */
+.hud-speedo-round {
+  position: fixed;
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  z-index: 25;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.speedo-dial-wrap {
+  position: relative;
+  width: 136px;
+  height: 136px;
+  border-radius: 50%;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.10);
+}
+
+.speedo-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.speedo-needle-group {
+  transform-origin: 66px 66px;
+  transition: transform 75ms linear;
+}
+
+.speedo-center-readout {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-top: 10px;
+}
+
+.speedo-num {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 1.85rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #f8fafc;
+  letter-spacing: -0.03em;
+}
+
+.speedo-unit {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: rgba(248, 250, 252, 0.55);
+  margin-top: 2px;
+}
+
+.speedo-bottom-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.speedo-gear {
+  min-width: 24px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: #f97316;
+  color: #0b0e14;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.speedo-lamp {
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.30);
+}
+
+.speedo-lamp.active {
+  background: rgba(239, 68, 68, 0.92);
+  color: #fff;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.75);
+}
+
+.speedo-lamp.lights.active {
+  background: rgba(56, 189, 248, 0.92);
+  color: #09111a;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.75);
+}
+
+.speedo-subgauges {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(9, 12, 17, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  min-width: 118px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+}
+
+.subgauge-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.subgauge-lbl {
+  font-size: 0.60rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: rgba(248, 250, 252, 0.62);
+  width: 30px;
+}
+
+.subgauge-track {
+  flex: 1;
+  height: 5px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.subgauge-fill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 120ms linear, background-color 180ms ease;
+}
+
+.subgauge-fill.fuel {
+  background: #e2e8f0;
+}
+.subgauge-fill.fuel.low {
+  background: #f59e0b;
+}
+
+.subgauge-fill.temp {
+  background: #38bdf8;
+}
+.subgauge-fill.temp.hot {
+  background: #ef4444;
+}
+
+.subgauge-val {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: rgba(248, 250, 252, 0.78);
+  min-width: 32px;
+  text-align: right;
+}
+.subgauge-val.hot {
+  color: #f87171;
+}
+
+.speedo-fps-row {
+  display: flex;
+  justify-content: space-between;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.60rem;
+  color: rgba(248, 250, 252, 0.45);
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 4px;
+}
+
+/* ================================================================
+ * Authentic Motorsport Mobile Touch Controls + Elevated Shifter
+ * ================================================================ */
+.touch-right-stack {
+  gap: 24px !important;
+}
+
+.touch-shift-row {
+  margin-bottom: 14px !important;
+  gap: 10px !important;
+}
+
+.touch-shift-btn {
+  background: rgba(15, 18, 24, 0.88) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  border-radius: 8px !important;
+  color: #e2e8f0 !important;
+  font-family: 'JetBrains Mono', ui-monospace, monospace !important;
+  font-weight: 700 !important;
+  font-size: 0.72rem !important;
+  letter-spacing: 0.06em !important;
+  padding: 9px 13px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+}
+
+.touch-shift-btn.up {
+  border-color: rgba(249, 115, 22, 0.55) !important;
+  color: #fdba74 !important;
+}
+
+.touch-shift-btn:active {
+  transform: translateY(1px) scale(0.97);
+  background: rgba(30, 36, 46, 0.95) !important;
+}
+
+.touch-btn {
+  background: linear-gradient(180deg, rgba(22, 26, 33, 0.90) 0%, rgba(12, 15, 20, 0.94) 100%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 10px !important;
+  color: #e2e8f0 !important;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.52), inset 0 1px 0 rgba(255, 255, 255, 0.09) !important;
+  backdrop-filter: blur(8px);
+}
+
+.touch-btn.pressed {
+  background: linear-gradient(180deg, rgba(36, 42, 52, 0.96) 0%, rgba(18, 22, 29, 0.98) 100%) !important;
+  border-color: rgba(249, 115, 22, 0.78) !important;
+  color: #fff !important;
+  transform: translateY(2px) scale(0.97);
+}
+
+/* Machined metal grooved brake & accelerator pedals (non-AI sim racing aesthetic) */
+.touch-pedal {
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.055) 0px,
+      rgba(255, 255, 255, 0.055) 3px,
+      transparent 3px,
+      transparent 10px
+    ),
+    linear-gradient(180deg, rgba(28, 32, 40, 0.92) 0%, rgba(14, 17, 22, 0.96) 100%) !important;
+  border: 1.5px solid rgba(255, 255, 255, 0.18) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.12) !important;
+}
+
+.touch-pedal.pedal-stop.pressed {
+  border-color: rgba(239, 68, 68, 0.85) !important;
+}
+.touch-pedal.pedal-go.pressed {
+  border-color: rgba(249, 115, 22, 0.85) !important;
+}
+
+.touch-pedal-fill.brake {
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.45) 0%, rgba(185, 28, 28, 0.65) 100%) !important;
+}
+.touch-pedal-fill.gas {
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.42) 0%, rgba(194, 65, 12, 0.65) 100%) !important;
+}
+
+.touch-pedal-label {
+  font-family: 'JetBrains Mono', ui-monospace, monospace !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.10em !important;
+  font-size: 0.68rem !important;
+  color: rgba(241, 245, 249, 0.90) !important;
+}
+
+.touch-pedal-pct {
+  font-family: 'JetBrains Mono', ui-monospace, monospace !important;
+  font-size: 0.62rem !important;
+  color: rgba(241, 245, 249, 0.62) !important;
+}
+
+/* Mobile Phone Portrait Layout Tuning */
+html[data-device="phone"] .hud-speedo-round {
+  right: 10px;
+  top: 56px;
+  bottom: auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+html[data-device="phone"] .speedo-dial-wrap {
+  width: 96px;
+  height: 96px;
+}
+
+html[data-device="phone"] .speedo-num {
+  font-size: 1.25rem;
+}
+
+html[data-device="phone"] .speedo-subgauges {
+  min-width: 96px;
+  padding: 5px 7px;
+  gap: 4px;
+}
+
+html[data-device="phone"] .diag-bottom-center {
+  bottom: calc(168px + env(safe-area-inset-bottom, 0px));
+}
+
+html[data-device="phone"] .diag-svg-horiz {
+  width: 136px;
+  height: 58px;
+}
+
+html[data-device="phone"] .touch-right-stack {
+  gap: 28px !important;
+}
+
+html[data-device="phone"] .touch-shift-row {
+  margin-bottom: 18px !important;
+}

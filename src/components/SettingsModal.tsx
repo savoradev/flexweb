@@ -454,6 +454,28 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
+                    <strong>Time of Day</strong>
+                    <span>Switch between Daylight and Night Mode with active xenon headlights</span>
+                  </div>
+                  <div className="bng-seg-group">
+                    {([
+                      { id: 'day', label: 'Day' },
+                      { id: 'night', label: 'Night' },
+                    ] as const).map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        className={`btn ${(settings.timeOfDay ?? 'day') === t.id ? 'active' : ''}`}
+                        onClick={() => patch('timeOfDay', t.id)}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bng-setting-row">
+                  <div>
                     <strong>Animated Skybox Clouds</strong>
                     <span>Lightweight procedural volumetric cloud shader</span>
                   </div>

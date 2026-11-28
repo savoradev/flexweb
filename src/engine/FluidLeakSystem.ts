@@ -15,14 +15,14 @@ const MAX_PUDDLES = 250;
 const MAX_SMOKE = 96;
 const MAX_SPARKS = 64;
 
-// Distinct physical fluid colors
-const COLOR_COOLANT = new Color(0x16e874); // bright fluorescent green radiator coolant
-const COLOR_OIL = new Color(0x0b0a09);     // dark viscous black/amber motor oil
-const COLOR_FUEL = new Color(0xc4d8ec);    // pale iridescent highly reflective fuel
-const COLOR_STEAM = new Color(0xe0ebf5);   // hot radiator steam/mist
-const COLOR_SMOKE = new Color(0x282c34);   // dark engine smoke
-const COLOR_VAPOR = new Color(0xd8e8f8);   // faint fuel vapor shimmer
-const COLOR_IMPACT_DUST = new Color(0xb8bcc4); // high-G collision smoke/dust burst
+// Realistic muted physical automotive fluid colors (no artificial neon glow)
+const COLOR_COOLANT = new Color(0x285c4f); // muted translucent dark teal-sage antifreeze
+const COLOR_OIL = new Color(0x13110e);     // dark viscous satin motor oil
+const COLOR_FUEL = new Color(0x6b6756);    // faint translucent amber-slate petrol
+const COLOR_STEAM = new Color(0xd6dee6);   // soft radiator steam/mist
+const COLOR_SMOKE = new Color(0x24272d);   // dark engine smoke
+const COLOR_VAPOR = new Color(0xc8d2dc);   // subtle fuel vapor shimmer
+const COLOR_IMPACT_DUST = new Color(0x9ea3ab); // natural collision dust burst
 const COLOR_SPARK_HOT = new Color(0xfff1a8);
 const COLOR_SPARK_ORANGE = new Color(0xff8418);
 
@@ -316,12 +316,12 @@ export class FluidLeakSystem {
     const stGeo = new CylinderGeometry(0.007, 0.012, 1.0, 6, 1, false);
     const stMat = new MeshPhysicalMaterial({
       color: 0xffffff,
-      roughness: 0.06,
-      metalness: 0.12,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.03,
+      roughness: 0.11,
+      metalness: 0.08,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.06,
       transparent: true,
-      opacity: 0.82,
+      opacity: 0.52,
       depthWrite: false,
     });
     this.streamMesh = new InstancedMesh(stGeo, stMat, MAX_STREAMS);
@@ -334,15 +334,15 @@ export class FluidLeakSystem {
     this.streamMesh.visible = false;
 
     // 2. Falling liquid droplets
-    const dGeo = new SphereGeometry(0.014, 6, 5);
+    const dGeo = new SphereGeometry(0.011, 6, 5);
     dGeo.scale(0.85, 2.0, 0.85);
     const dMat = new MeshPhysicalMaterial({
       color: 0xffffff,
-      roughness: 0.05,
-      metalness: 0.10,
-      clearcoat: 1.0,
+      roughness: 0.09,
+      metalness: 0.08,
+      clearcoat: 0.85,
       transparent: true,
-      opacity: 0.92,
+      opacity: 0.62,
     });
     this.dropMesh = new InstancedMesh(dGeo, dMat, MAX_DROPS);
     this.dropMesh.frustumCulled = false;
@@ -358,14 +358,14 @@ export class FluidLeakSystem {
       map: pack?.map ?? undefined,
       alphaMap: pack?.alphaMap ?? undefined,
       normalMap: pack?.normalMap ?? undefined,
-      normalScale: new Vector2(0.45, 0.45),
-      roughness: 0.07,
-      metalness: 0.12,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.03,
-      reflectivity: 1.0,
+      normalScale: new Vector2(0.32, 0.32),
+      roughness: 0.11,
+      metalness: 0.08,
+      clearcoat: 0.90,
+      clearcoatRoughness: 0.06,
+      reflectivity: 0.85,
       transparent: true,
-      opacity: 0.90,
+      opacity: 0.64,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -2,

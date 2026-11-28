@@ -1,4 +1,4 @@
-import { Box3, BoxGeometry, BufferAttribute, BufferGeometry, CylinderGeometry, DoubleSide, Group, Material, Matrix4, Mesh, MeshPhysicalMaterial, MeshStandardMaterial, Object3D, TorusGeometry, Vector2, Vector3 } from 'three';
+import { Box3, BoxGeometry, BufferAttribute, BufferGeometry, CylinderGeometry, DoubleSide, Group, Material, Matrix4, Mesh, MeshPhysicalMaterial, MeshStandardMaterial, Object3D, PointLight, SpotLight, TorusGeometry, Vector2, Vector3 } from 'three';
 import { CarProfile, createSedanProfile, createSupercarProfile } from './CarProfile';
 import { MeshDeformer, ensurePlainAttributes } from './MeshDeformer';
 import type { PrecomputedBindingData } from './MeshCacheDB';
@@ -64,6 +64,7 @@ export interface VehicleVisualSource {
   materials: CarMaterials;
   paintMaterials?: MeshStandardMaterial[];
   taillightMaterials?: MeshStandardMaterial[];
+  headlightMaterials?: MeshStandardMaterial[];
   dispose(): void;
 }
 
@@ -86,9 +87,16 @@ export type TransmissionMode = 'auto' | 'semi' | 'manual';
 export interface VehicleMechanicalState {
   engineHealth: number;
   engineStalled: boolean;
+  engineBroken: boolean;
+  engineTemp: number;
+  overheating: boolean;
+  radiatorDamaged: boolean;
+  fuelLevel: number;
+  coolantLevel: number;
   frontAxleDamage: number;
   rearAxleDamage: number;
   axleDamage: [number, number, number, number];
+  flatTires: [boolean, boolean, boolean, boolean];
   steeringDamage: number;
   steeringLocked: boolean;
   steeringBiasDeg: number;
@@ -109,6 +117,7 @@ export interface VehicleTelemetry {
   brake: number;
   steer: number;
   absActive: boolean;
+  headlightsOn: boolean;
   maxTireSlip: number;
   shiftCount: number;
   gForce: number;
@@ -218,6 +227,16 @@ export class SoftBodyVehicle implements SubstepForceProvider {
   private coolantSeverity = 0;
   private oilSeverity = 0;
   private fuelSeverity = 0;
+  /** Headlights toggle (auto-enabled in Night Mode or manually toggled). */
+  headlightsOn = false;
+  private fuelLevel = 1.0;
+  private coolantLevel = 1.0;
+  private engineTemp = 88.0;
+  private radiatorDamaged = false;
+  private engineBroken = false;
+  private readonly headlightL: SpotLight;
+  private readonly headlightR: SpotLight;
+  private readonly brakeGlowLight: PointLight;
   private readonly radiatorNode: number;
   private readonly oilPanNodeA: number;
   private readonly oilPanNodeB: number;
@@ -1076,18 +1095,47 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       this.deformer.warmup();
     }
 
+    // Twin real-time headlight beams (car-local, zero per-frame allocations) + high-intensity rear brake/ABS glow
+    const hlY = Math.max(0.58, P.beltY(P.halfL - 0.15) - 0.14);
+    const hlX = P.width * 0.34;
+    const hlZ = P.halfL - 0.08;
+    this.headlightL = new SpotLight(0xeef6ff, 0, 58, Math.PI * 0.24, 0.48, 1.35);
+    this.headlightL.position.set(hlX, hlY, hlZ);
+    this.headlightL.target.position.set(hlX * 0.7, Math.max(0.05, hlY - 0.42), hlZ + 22);
+    this.headlightL.castShadow = false;
+    this.root.add(this.headlightL);
+    this.root.add(this.headlightL.target);
+
+    this.headlightR = new SpotLight(0xeef6ff, 0, 58, Math.PI * 0.24, 0.48, 1.35);
+    this.headlightR.position.set(-hlX, hlY, hlZ);
+    this.headlightR.target.position.set(-hlX * 0.7, Math.max(0.05, hlY - 0.42), hlZ + 22);
+    this.headlightR.castShadow = false;
+    this.root.add(this.headlightR);
+    this.root.add(this.headlightR.target);
+
+    this.brakeGlowLight = new PointLight(0xff1022, 0, 14, 1.5);
+    this.brakeGlowLight.position.set(0, Math.max(0.68, P.beltY(-P.halfL + 0.15) - 0.06), -P.halfL - 0.32);
+    this.root.add(this.brakeGlowLight);
+
     this.baseline.track(this.solver.rest);
     this.telemetry = {
-      speedKmh: 0, gear: 'N', transmissionMode: 'auto', rpm: 850, throttle: 0, brake: 0, steer: 0, absActive: false, maxTireSlip: 0, shiftCount: 0, gForce: 0, peakGForce: 0,
+      speedKmh: 0, gear: 'N', transmissionMode: 'auto', rpm: 850, throttle: 0, brake: 0, steer: 0, absActive: false, headlightsOn: false, maxTireSlip: 0, shiftCount: 0, gForce: 0, peakGForce: 0,
       impactKmh: 0, peakImpactKmh: 0, absorbedKJ: 0, brokenBeams: 0,
       suspCompression: [0, 0, 0, 0],
       damage: { front: 0, cabin: 0, rear: 0, hood: 0, bumpers: 0, fenders: 0, engine: 0 },
       mech: {
         engineHealth: 1,
         engineStalled: false,
+        engineBroken: false,
+        engineTemp: 88,
+        overheating: false,
+        radiatorDamaged: false,
+        fuelLevel: 1,
+        coolantLevel: 1,
         frontAxleDamage: 0,
         rearAxleDamage: 0,
         axleDamage: [0, 0, 0, 0],
+        flatTires: [false, false, false, false],
         steeringDamage: 0,
         steeringLocked: false,
         steeringBiasDeg: 0,
@@ -1170,6 +1218,11 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.coolantSeverity = 0;
     this.oilSeverity = 0;
     this.fuelSeverity = 0;
+    this.fuelLevel = 1.0;
+    this.coolantLevel = 1.0;
+    this.engineTemp = 88.0;
+    this.radiatorDamaged = false;
+    this.engineBroken = false;
     this.misfirePhase = 0;
     this.engineMount.position.set(0, 0, 0);
     this.engineMount.rotation.set(0, 0, 0);
@@ -1909,11 +1962,11 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     }
 
     this.updateParts();
-    this.updateMechanicalDamage();
+    this.updateMechanicalDamage(dt);
   }
 
-  /** Updates engine pushback/stall, axle/half-shaft damage, steering rack lock, and fluid leak flags (60 Hz, zero GC). */
-  private updateMechanicalDamage(): void {
+  /** Updates engine pushback/stall, thermal overheat/blowout, fuel & coolant levels, axle damage, and fluid leak flags (60 Hz, zero GC). */
+  private updateMechanicalDamage(dt: number): void {
     const S = this.solver;
     const frontDmg = Math.min(1, (S.zoneDamageRatio(Zone.Crumple) + S.zoneDamageRatio(Zone.Longeron)) * 0.75);
     const rearDmg = S.zoneDamageRatio(Zone.Trunk);
@@ -1927,18 +1980,64 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       : Math.min(1, frontDmg * 0.72 + engSubDmg * 0.70 + hoodDmg * 0.22);
     if (computedEngDmg > this.engineDmg) this.engineDmg = computedEngDmg;
     if (this.engineDmg >= 0.80) {
+      this.engineBroken = true;
       this.engineStalled = true;
     }
 
     // Zone-based fluid leak triggers & dynamic severity scaling (0 = sealed, 0..1 = slow drip -> gushing stream)
     const bumperDmg = S.zoneDamageRatio(Zone.Bumper);
     const fenderDmg = S.zoneDamageRatio(Zone.Fender);
-    // 1. Radiator / Front Grille & Bumper Nodes -> Coolant Leak
+    // 1. Radiator / Front Grille & Bumper Nodes -> Coolant Leak & Radiator Damage
     const radTrigger = Math.max(frontDmg * 0.92, bumperDmg * 0.78);
     if (radTrigger > 0.16) {
       const sev = Math.min(1, (radTrigger - 0.16) / 0.64);
       if (sev > this.coolantSeverity) this.coolantSeverity = sev;
       this.coolantLeak = true;
+      this.radiatorDamaged = true;
+    }
+
+    // Fuel consumption (normal driving + accelerated drain if fuel tank is leaking)
+    const rpmNorm = Math.max(0, Math.min(1, (this.engineRpm - 850) / 6650));
+    if (!this.engineStalled) {
+      const burnRate = 0.00018 + this.input.throttle * 0.0014 + rpmNorm * 0.0006;
+      this.fuelLevel = Math.max(0, this.fuelLevel - burnRate * dt);
+    }
+    if (this.fuelLeak && this.fuelLevel > 0) {
+      this.fuelLevel = Math.max(0, this.fuelLevel - (0.012 + this.fuelSeverity * 0.032) * dt);
+    }
+    if (this.fuelLevel <= 0.0001) {
+      this.fuelLevel = 0;
+      this.engineStalled = true;
+    }
+
+    // Coolant depletion when radiator is leaking
+    if (this.coolantLeak && this.coolantLevel > 0) {
+      this.coolantLevel = Math.max(0, this.coolantLevel - (0.020 + this.coolantSeverity * 0.055) * dt);
+    }
+
+    // Engine thermal model: healthy radiator keeps temp ~88–94°C; damaged radiator or empty coolant overheats & blows engine at 128°C!
+    const radEfficiency = Math.max(0, 1 - Math.max(radTrigger, this.coolantSeverity) * 1.15) * Math.min(1, this.coolantLevel * 1.35);
+    const heatGen = this.engineStalled
+      ? 0
+      : (0.85 + this.input.throttle * 3.8 + rpmNorm * 2.9 + this.engineDmg * 1.4);
+    const speedAirflow = Math.min(1.8, Math.abs(this.speed) / 22);
+    const coolRate = this.engineStalled
+      ? (this.engineTemp - 65) * 0.045
+      : (this.engineTemp - 86) * (0.04 + radEfficiency * (0.28 + speedAirflow * 0.14));
+    const heatDelta = (heatGen * (1.0 - radEfficiency * 0.72) - coolRate) * dt;
+    this.engineTemp = Math.max(65, Math.min(136, this.engineTemp + heatDelta));
+
+    // Overheating emits extra steam and seizes/breaks the engine at >= 128°C
+    if (this.engineTemp >= 112 && !this.engineBroken) {
+      const heatSev = Math.min(1, (this.engineTemp - 110) / 18);
+      if (heatSev * 0.45 > this.coolantSeverity && this.coolantLevel > 0.02) {
+        this.coolantSeverity = heatSev * 0.45;
+      }
+      if (this.engineTemp >= 128) {
+        this.engineBroken = true;
+        this.engineStalled = true;
+        this.engineDmg = Math.max(this.engineDmg, 0.92);
+      }
     }
     // 2. Engine Block / Front Subframe / Oil Pan Nodes -> Engine Oil Leak (frontal OR undercarriage impact)
     const panImpact = Math.max(
@@ -2542,19 +2641,36 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       );
       this.spoilerGroup.rotation.x = this.spoilerPitch;
     }
+    // Headlights (twin SpotLights + xenon emissive lenses) & super-bright Brake / ABS strobe lights
+    const hlActive = this.headlightsOn && !this.engineBroken;
+    const hlIntensity = hlActive ? 36.0 : 0;
+    this.headlightL.intensity = hlIntensity;
+    this.headlightR.intensity = hlIntensity;
+    if (this.src.headlightMaterials) {
+      const hlEmissive = hlActive ? 9.0 : 0.25;
+      for (let i = 0; i < this.src.headlightMaterials.length; i++) {
+        const hm = this.src.headlightMaterials[i];
+        hm.emissiveIntensity = hlEmissive;
+        hm.toneMapped = !hlActive;
+      }
+    }
+
     const brakeLit = this.input.brake > 0.05 || this.input.handbrake > 0;
     const speedKmhNow = Math.abs(this.speed) * 3.6;
-    const absFlash = this.absActive && speedKmhNow > 30 && Math.sin(this.absPhase * 0.5) > 0;
-    const tailEmissive = absFlash ? 11.0 : brakeLit ? 6.5 : 0.9;
+    const absFlash = this.absActive && speedKmhNow > 25 && Math.sin(this.absPhase * 0.55) > 0;
+    // Much stronger brake & ABS strobe visibility (especially punchy in both day and night)
+    const tailEmissive = absFlash ? 26.0 : brakeLit ? 13.5 : hlActive ? 2.8 : 0.9;
     this.src.materials.taillight.emissiveIntensity = tailEmissive;
-    this.src.materials.taillight.toneMapped = !brakeLit && !absFlash;
+    this.src.materials.taillight.toneMapped = !brakeLit && !absFlash && !hlActive;
     if (this.src.taillightMaterials) {
       for (let i = 0; i < this.src.taillightMaterials.length; i++) {
         const tm = this.src.taillightMaterials[i];
         tm.emissiveIntensity = tailEmissive;
-        tm.toneMapped = !brakeLit && !absFlash;
+        tm.toneMapped = !brakeLit && !absFlash && !hlActive;
       }
     }
+    this.brakeGlowLight.intensity = absFlash ? 16.0 : brakeLit ? 6.5 : hlActive ? 1.2 : 0;
+    this.brakeGlowLight.distance = absFlash ? 16 : brakeLit ? 10 : 6;
   }
 
   private frameFromRender(W: Float32Array): void {
@@ -2629,14 +2745,25 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     T.damage.bumpers = S.zoneDamageRatio(Zone.Bumper);
     T.damage.fenders = S.zoneDamageRatio(Zone.Fender);
     T.damage.engine = this.engineDmg;
+    T.headlightsOn = this.headlightsOn;
     T.mech.engineHealth = Math.max(0, 1 - this.engineDmg);
     T.mech.engineStalled = this.engineStalled;
+    T.mech.engineBroken = this.engineBroken;
+    T.mech.engineTemp = Math.round(this.engineTemp);
+    T.mech.overheating = this.engineTemp >= 112;
+    T.mech.radiatorDamaged = this.radiatorDamaged;
+    T.mech.fuelLevel = this.fuelLevel;
+    T.mech.coolantLevel = this.coolantLevel;
     T.mech.frontAxleDamage = this.frontAxleDmg;
     T.mech.rearAxleDamage = this.rearAxleDmg;
     T.mech.axleDamage[0] = this.axleDmg[0];
     T.mech.axleDamage[1] = this.axleDmg[1];
     T.mech.axleDamage[2] = this.axleDmg[2];
     T.mech.axleDamage[3] = this.axleDmg[3];
+    T.mech.flatTires[0] = this.wheels[0].tyreFlat > 0.35;
+    T.mech.flatTires[1] = this.wheels[1].tyreFlat > 0.35;
+    T.mech.flatTires[2] = this.wheels[2].tyreFlat > 0.35;
+    T.mech.flatTires[3] = this.wheels[3].tyreFlat > 0.35;
     T.mech.steeringDamage = this.steeringDmg;
     T.mech.steeringLocked = this.steeringLocked;
     T.mech.steeringBiasDeg = Math.round((this.steeringLocked ? this.steeringLockAngle : this.steeringBias) * (180 / Math.PI));
@@ -3304,6 +3431,7 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
   const materials = createCarMaterials(defaultPaint);
   const paintMaterials: MeshStandardMaterial[] = [materials.paint];
   const taillightMaterials: MeshStandardMaterial[] = [];
+  const headlightMaterials: MeshStandardMaterial[] = [];
   const seenMats = new Set<Material>();
   const replacedMats = new Map<Material, Material>();
   const dodgeGlassMat = isDodgeDemon
@@ -3427,6 +3555,14 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
         sm.emissive?.setHex(0xff1020);
         sm.emissiveIntensity = 0.85;
         taillightMaterials.push(sm);
+      } else if (
+        (/headlight|front_?light|drl|daytime|xenon|led_?front|ARm4_headlight|ARm4_drl|ARm4_beam/i.test(`${sm.name} ${e.path}`) ||
+          (/Light_D|lamp|light/i.test(sm.name) && e.box.min.z > profile.halfL * 0.45)) &&
+        !/tail|rear|brake|rev|turn|signal|glass|lens/i.test(sm.name)
+      ) {
+        sm.emissive?.setHex(0xeef6ff);
+        sm.emissiveIntensity = 0.25;
+        headlightMaterials.push(sm);
       }
       list[mi].needsUpdate = true;
     }
@@ -3702,21 +3838,26 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
       });
   }
 
-  // Mount detailed lightweight 3D engine block (deformable/pushback mount) & subdivided deformable front radiator
+  // Only mount our procedural 3D engine block if the GLB does NOT already include its own pre-modeled 3D engine (e.g., BMW M4 F82 S55)!
   const isMidRearEngine = /mclaren|p1|ferrari|lamborghini|mid.?engine/i.test(name);
-  const engineAssembly = buildDetailedEngineAssembly(profile, isMidRearEngine ? 'rear' : 'front', materials);
+  const hasPreModeledEngine = bodyEntries.some((e) =>
+    /(?:^|\/)(?:ARm4_)?(engine_i6|enginebay|header_i6|engine_block|motor)(?:[/_.]|$)/i.test(e.path),
+  );
   const engineMeshes: Mesh[] = [];
-  for (const em of engineAssembly.rigid) {
-    const g = em.geometry;
-    if (!g.getAttribute('normal')) g.computeVertexNormals();
-    g.computeBoundingBox();
-    g.computeBoundingSphere();
-    em.visible = true;
-    em.frustumCulled = true;
-    engineMeshes.push(em);
-  }
-  for (const dp of engineAssembly.deformable) {
-    parts.push(dp);
+  if (!hasPreModeledEngine) {
+    const engineAssembly = buildDetailedEngineAssembly(profile, isMidRearEngine ? 'rear' : 'front', materials);
+    for (const em of engineAssembly.rigid) {
+      const g = em.geometry;
+      if (!g.getAttribute('normal')) g.computeVertexNormals();
+      g.computeBoundingBox();
+      g.computeBoundingSphere();
+      em.visible = true;
+      em.frustumCulled = true;
+      engineMeshes.push(em);
+    }
+    for (const dp of engineAssembly.deformable) {
+      parts.push(dp);
+    }
   }
 
   // Add detailed 3D cabin interior for Dodge Challenger SRT Demon (visible through its semi-transparent tinted windows!)
@@ -3763,6 +3904,7 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
     materials,
     paintMaterials,
     taillightMaterials,
+    headlightMaterials,
     dispose() {
       for (const m of Object.values(materials) as Material[]) m.dispose();
     },

@@ -400,13 +400,16 @@ export function App(): React.ReactElement {
     };
   }, [screen, loadingState]);
 
+  const [headlightsOn, setHeadlightsOn] = useState(false);
   const hudSpeedRef = useRef<HTMLSpanElement | null>(null);
   const hudGearRef = useRef<HTMLDivElement | null>(null);
-  const hudRpmTextRef = useRef<HTMLSpanElement | null>(null);
-  const hudRpmFillRef = useRef<HTMLDivElement | null>(null);
-  const hudGPeakRef = useRef<HTMLSpanElement | null>(null);
-  const hudGLiveRef = useRef<HTMLSpanElement | null>(null);
+  const hudRpmArcRef = useRef<SVGCircleElement | null>(null);
+  const hudNeedleRef = useRef<SVGGElement | null>(null);
+  const hudFuelFillRef = useRef<HTMLDivElement | null>(null);
+  const hudTempFillRef = useRef<HTMLDivElement | null>(null);
+  const hudTempTextRef = useRef<HTMLSpanElement | null>(null);
   const hudAbsRef = useRef<HTMLSpanElement | null>(null);
+  const hudLightsRef = useRef<HTMLSpanElement | null>(null);
   const hudFpsRef = useRef<HTMLSpanElement | null>(null);
   const wheelSvgRef = useRef<SVGSVGElement | null>(null);
   const brakeFillRef = useRef<HTMLDivElement | null>(null);
@@ -425,16 +428,34 @@ export function App(): React.ReactElement {
       const spd = Math.round(mph ? tel.speedKmh * 0.621371 : tel.speedKmh);
       if (hudSpeedRef.current) hudSpeedRef.current.textContent = String(spd);
       if (hudGearRef.current) hudGearRef.current.textContent = tel.gear;
-      if (hudRpmTextRef.current) hudRpmTextRef.current.textContent = `${tel.rpm} RPM`;
-      if (hudRpmFillRef.current) {
-        const pct = Math.min(100, Math.max(0, (tel.rpm / 8200) * 100));
-        hudRpmFillRef.current.style.width = `${pct.toFixed(1)}%`;
-        hudRpmFillRef.current.classList.toggle('redline', pct > 84);
+      const rpmFrac = Math.min(1, Math.max(0, tel.rpm / 8200));
+      // Circular 240-deg arc (r=54, circumference=339.29, active arc=226.2)
+      if (hudRpmArcRef.current) {
+        const arcLen = 226.2;
+        hudRpmArcRef.current.style.strokeDashoffset = (arcLen * (1 - rpmFrac)).toFixed(1);
+        hudRpmArcRef.current.style.stroke = rpmFrac > 0.84 ? '#ef4444' : rpmFrac > 0.66 ? '#f59e0b' : '#f8fafc';
       }
-      if (hudGPeakRef.current) hudGPeakRef.current.textContent = `MAX ${tel.peakGForce.toFixed(1)} G`;
-      if (hudGLiveRef.current) hudGLiveRef.current.textContent = `Live ${tel.gForce.toFixed(1)} G`;
+      if (hudNeedleRef.current) {
+        const deg = -120 + rpmFrac * 240;
+        hudNeedleRef.current.style.transform = `rotate(${deg.toFixed(1)}deg)`;
+      }
+      if (hudFuelFillRef.current) {
+        const fPct = Math.round(Math.max(0, Math.min(1, tel.mech.fuelLevel)) * 100);
+        hudFuelFillRef.current.style.width = `${fPct}%`;
+        hudFuelFillRef.current.classList.toggle('low', fPct <= 18);
+      }
+      if (hudTempFillRef.current) {
+        const tempNorm = Math.max(0, Math.min(1, (tel.mech.engineTemp - 65) / 65));
+        hudTempFillRef.current.style.width = `${Math.round(tempNorm * 100)}%`;
+        hudTempFillRef.current.classList.toggle('hot', tel.mech.engineTemp >= 110);
+      }
+      if (hudTempTextRef.current) {
+        hudTempTextRef.current.textContent = `${tel.mech.engineTemp}°C`;
+        hudTempTextRef.current.classList.toggle('hot', tel.mech.engineTemp >= 110);
+      }
       if (hudAbsRef.current) hudAbsRef.current.classList.toggle('active', tel.absActive);
-      if (hudFpsRef.current) hudFpsRef.current.textContent = `${Math.round(fps)} FPS`;
+      if (hudLightsRef.current) hudLightsRef.current.classList.toggle('active', tel.headlightsOn);
+      if (hudFpsRef.current) hudFpsRef.current.textContent = `${Math.round(fps)}`;
     };
     engineRef.current = engine;
     (window as unknown as { __flexweb?: EngineCore }).__flexweb = engine;
@@ -519,6 +540,18 @@ export function App(): React.ReactElement {
           k.space = true; syncVehicleInputs(); break;
         case 'KeyR':
           engine.reset(); break;
+        case 'KeyL':
+          setHeadlightsOn(engine.toggleHeadlights()); break;
+        case 'KeyN':
+          setSettings((prev) => {
+            const nextTod = (prev.timeOfDay ?? 'day') === 'night' ? 'day' : 'night';
+            const next = { ...prev, timeOfDay: nextTod } as SimulatorSettings;
+            saveSimulatorSettings(next);
+            engine.applySettings(next);
+            setHeadlightsOn(engine.getHeadlights());
+            return next;
+          });
+          break;
         case 'KeyH':
           setSettings((prev) => {
             const next = { ...prev, showHud: !prev.showHud };
@@ -908,6 +941,41 @@ export function App(): React.ReactElement {
                   {isPhone ? '⛶' : isFullscreen ? '⛶ Exit' : '⛶ Full'}
                 </button>
                 <button
+                  id="toggle-headlights-btn"
+                  type="button"
+                  className={`btn ${headlightsOn ? 'active' : ''}`}
+                  title="Phares (L)"
+                  onClick={() => {
+                    const eng = engineRef.current;
+                    if (!eng) return;
+                    setHeadlightsOn(eng.toggleHeadlights());
+                  }}
+                >
+                  {isPhone ? '💡' : headlightsOn ? 'Phares: ON' : 'Phares'}
+                </button>
+                <button
+                  id="toggle-night-btn"
+                  type="button"
+                  className={`btn ${(settings.timeOfDay ?? 'day') === 'night' ? 'active' : ''}`}
+                  title="Mode Nuit / Jour (N)"
+                  onClick={() => {
+                    const nextTod = (settings.timeOfDay ?? 'day') === 'night' ? 'day' : 'night';
+                    updateSettings({ ...settings, timeOfDay: nextTod });
+                    if (engineRef.current) setHeadlightsOn(engineRef.current.getHeadlights());
+                  }}
+                >
+                  {(settings.timeOfDay ?? 'day') === 'night' ? (isPhone ? '🌙' : 'Nuit') : (isPhone ? '☀' : 'Jour')}
+                </button>
+                <button
+                  id="repair-vehicle-btn"
+                  type="button"
+                  className="btn btn-repair"
+                  title="Réparer la voiture sur place"
+                  onClick={() => engineRef.current?.repairInPlace()}
+                >
+                  {isPhone ? '🔧' : 'Réparer'}
+                </button>
+                <button
                   id="reset-vehicle-btn"
                   type="button"
                   className="btn btn-reset"
@@ -923,9 +991,9 @@ export function App(): React.ReactElement {
             )}
           </div>
 
-          {/* Right: Compact BeamNG Vehicle Diagnostics */}
+          {/* Bottom-Center: Side-Oriented Horizontal Vehicle Diagnostics + Live Breakage Alerts ABOVE */}
           {settings.showHud && settings.showDiagnostics && (
-            <aside className="hud-rightbar hud-rightbar-minimal bng-ingame-right">
+            <aside className="diag-bottom-center">
               <VehicleDiagnostics
                 telemetry={t}
                 collapsed={diagCollapsed}
@@ -1178,34 +1246,103 @@ export function App(): React.ReactElement {
             </div>
           )}
 
-          {/* Bottom-Right: Modern Minimalist Tachometer (60 FPS direct DOM updates, zero React lag) */}
+          {/* Bottom-Right: Round Motorsport Speedometer with Fuel & Engine Temp Gauges */}
           {settings.showHud && (
-            <footer className="hud-cluster hud-cluster-minimal">
-              <div className="cluster-main">
-                <div className="speed-readout">
-                  <span id="speed-value" ref={hudSpeedRef} className="speed-value">{speedDisplay}</span>
-                  <span className="speed-unit">{speedUnitLabel}</span>
-                </div>
-                <div id="gear-badge" ref={hudGearRef} className="gear-badge">{t?.gear ?? 'N'}</div>
-                <div className="cluster-rpm">
-                  <div className="rpm-top">
-                    <span ref={hudRpmTextRef}>{t?.rpm ?? 850} RPM</span>
-                    <span ref={hudGPeakRef} className="g-peak">MAX {(t?.peakGForce ?? 0).toFixed(1)} G</span>
+            <footer className="hud-speedo-round">
+              <div className="speedo-dial-wrap">
+                <svg viewBox="0 0 132 132" className="speedo-svg" aria-hidden="true">
+                  {/* Track arc (240° sweep starting at 150°) */}
+                  <circle
+                    cx="66"
+                    cy="66"
+                    r="54"
+                    fill="rgba(9, 12, 17, 0.88)"
+                    stroke="rgba(255, 255, 255, 0.10)"
+                    strokeWidth="7"
+                    strokeDasharray="226.2 340"
+                    strokeLinecap="round"
+                    transform="rotate(150 66 66)"
+                  />
+                  {/* Redline accent zone */}
+                  <circle
+                    cx="66"
+                    cy="66"
+                    r="54"
+                    fill="none"
+                    stroke="rgba(239, 68, 68, 0.36)"
+                    strokeWidth="7"
+                    strokeDasharray="36 340"
+                    strokeDashoffset="-190"
+                    strokeLinecap="round"
+                    transform="rotate(150 66 66)"
+                  />
+                  {/* Live RPM sweep arc */}
+                  <circle
+                    ref={hudRpmArcRef}
+                    cx="66"
+                    cy="66"
+                    r="54"
+                    fill="none"
+                    stroke="#f8fafc"
+                    strokeWidth="7"
+                    strokeDasharray="226.2 340"
+                    strokeDashoffset={(226.2 * (1 - rpmPct / 100)).toFixed(1)}
+                    strokeLinecap="round"
+                    transform="rotate(150 66 66)"
+                  />
+                  {/* Analog tachometer needle */}
+                  <g
+                    ref={hudNeedleRef}
+                    className="speedo-needle-group"
+                    style={{ transform: `rotate(${(-120 + (rpmPct / 100) * 240).toFixed(1)}deg)` }}
+                  >
+                    <line x1="66" y1="66" x2="66" y2="18" stroke="#f97316" strokeWidth="2.4" strokeLinecap="round" />
+                    <circle cx="66" cy="66" r="4.5" fill="#f97316" />
+                  </g>
+                </svg>
+
+                <div className="speedo-center-readout">
+                  <span id="speed-value" ref={hudSpeedRef} className="speedo-num">{speedDisplay}</span>
+                  <span className="speedo-unit">{speedUnitLabel}</span>
+                  <div className="speedo-bottom-row">
+                    <div id="gear-badge" ref={hudGearRef} className="speedo-gear">{t?.gear ?? 'N'}</div>
+                    <span ref={hudAbsRef} className={`speedo-lamp ${t?.absActive ? 'active' : ''}`}>ABS</span>
+                    <span ref={hudLightsRef} className={`speedo-lamp lights ${t?.headlightsOn ? 'active' : ''}`}>HL</span>
                   </div>
-                  <div className="rpm-track">
+                </div>
+              </div>
+
+              {/* Integrated Fuel & Engine Temp Gauges */}
+              <div className="speedo-subgauges">
+                <div className="subgauge-row">
+                  <span className="subgauge-lbl">FUEL</span>
+                  <div className="subgauge-track">
                     <div
-                      ref={hudRpmFillRef}
-                      className={`rpm-fill ${rpmPct > 84 ? 'redline' : ''}`}
-                      style={{ width: `${rpmPct}%` }}
+                      ref={hudFuelFillRef}
+                      className={`subgauge-fill fuel ${(t?.mech?.fuelLevel ?? 1) <= 0.18 ? 'low' : ''}`}
+                      style={{ width: `${Math.round((t?.mech?.fuelLevel ?? 1) * 100)}%` }}
                     />
                   </div>
-                  <div className="rpm-sub">
-                    <span ref={hudGLiveRef}>Live {(t?.gForce ?? 0).toFixed(1)} G</span>
-                    <span>·</span>
-                    <span ref={hudAbsRef} className={`abs-lamp ${t?.absActive ? 'active' : ''}`}>ABS</span>
-                    <span>·</span>
-                    <span ref={hudFpsRef}>{Math.round(stats?.fps ?? 60)} FPS</span>
+                </div>
+                <div className="subgauge-row">
+                  <span className="subgauge-lbl">TEMP</span>
+                  <div className="subgauge-track">
+                    <div
+                      ref={hudTempFillRef}
+                      className={`subgauge-fill temp ${(t?.mech?.engineTemp ?? 88) >= 110 ? 'hot' : ''}`}
+                      style={{ width: `${Math.round(Math.max(0, Math.min(1, ((t?.mech?.engineTemp ?? 88) - 65) / 65)) * 100)}%` }}
+                    />
                   </div>
+                  <span
+                    ref={hudTempTextRef}
+                    className={`subgauge-val ${(t?.mech?.engineTemp ?? 88) >= 110 ? 'hot' : ''}`}
+                  >
+                    {t?.mech?.engineTemp ?? 88}°C
+                  </span>
+                </div>
+                <div className="speedo-fps-row">
+                  <span>FPS</span>
+                  <span ref={hudFpsRef}>{Math.round(stats?.fps ?? 60)}</span>
                 </div>
               </div>
             </footer>

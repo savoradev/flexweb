@@ -10,7 +10,7 @@
  * on mobile/tablet devices (such as 4 GB RAM tablets) never interrupt vehicle loading.
  */
 
-export const MODEL_CACHE_VERSION = 'v2';
+export const MODEL_CACHE_VERSION = 'v3';
 export const ASSET_CACHE_PREFIX = 'flexweb-vehicles-';
 export const ASSET_CACHE_NAME = `${ASSET_CACHE_PREFIX}${MODEL_CACHE_VERSION}`;
 
