@@ -994,19 +994,6 @@ export function App(): React.ReactElement {
                   {isPhone ? '💡' : headlightsOn ? 'Phares: ON' : 'Phares'}
                 </button>
                 <button
-                  id="toggle-night-btn"
-                  type="button"
-                  className={`btn ${(settings.timeOfDay ?? 'day') === 'night' ? 'active' : ''}`}
-                  title="Mode Nuit / Jour (N)"
-                  onClick={() => {
-                    const nextTod = (settings.timeOfDay ?? 'day') === 'night' ? 'day' : 'night';
-                    updateSettings({ ...settings, timeOfDay: nextTod });
-                    if (engineRef.current) setHeadlightsOn(engineRef.current.getHeadlights());
-                  }}
-                >
-                  {(settings.timeOfDay ?? 'day') === 'night' ? (isPhone ? '🌙' : 'Nuit') : (isPhone ? '☀' : 'Jour')}
-                </button>
-                <button
                   id="repair-vehicle-btn"
                   type="button"
                   className="btn btn-repair"

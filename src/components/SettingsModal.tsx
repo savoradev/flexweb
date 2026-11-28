@@ -6,7 +6,7 @@ import type {
   SimulatorSettings,
 } from '../types/settings';
 
-type SettingsTab = 'general' | 'controls' | 'sounds' | 'graphics';
+type SettingsTab = 'general' | 'controls' | 'sounds' | 'graphics' | 'weather';
 
 interface SettingsModalProps {
   settings: SimulatorSettings;
@@ -80,6 +80,13 @@ export function SettingsModal({
               onClick={() => setTab('graphics')}
             >
               Graphics
+            </button>
+            <button
+              type="button"
+              className={`bng-tab-btn ${tab === 'weather' ? 'active' : ''}`}
+              onClick={() => setTab('weather')}
+            >
+              Météo
             </button>
           </nav>
 
@@ -428,39 +435,20 @@ export function SettingsModal({
                     ))}
                   </div>
                 </div>
+              </div>
+            )}
 
+            {tab === 'weather' && (
+              <div className="bng-settings-group">
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Weather &amp; HD Rain</strong>
-                    <span>Dripping raindrops on paint &amp; glass, wet asphalt sheen, and tire spray</span>
+                    <strong>Jour / Nuit</strong>
+                    <span>Transition douce du ciel entre le jour, le crépuscule et la nuit étoilée</span>
                   </div>
                   <div className="bng-seg-group">
                     {([
-                      { id: 'off', label: 'Off' },
-                      { id: 'drizzle', label: 'Drizzle' },
-                      { id: 'heavy', label: 'Heavy Rain' },
-                    ] as const).map((w) => (
-                      <button
-                        key={w.id}
-                        type="button"
-                        className={`btn ${(settings.weatherMode ?? 'off') === w.id ? 'active' : ''}`}
-                        onClick={() => patch('weatherMode', w.id)}
-                      >
-                        {w.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="bng-setting-row">
-                  <div>
-                    <strong>Time of Day</strong>
-                    <span>Switch between Daylight and Night Mode with active xenon headlights</span>
-                  </div>
-                  <div className="bng-seg-group">
-                    {([
-                      { id: 'day', label: 'Day' },
-                      { id: 'night', label: 'Night' },
+                      { id: 'day', label: 'Jour' },
+                      { id: 'night', label: 'Nuit' },
                     ] as const).map((t) => (
                       <button
                         key={t.id}
@@ -476,8 +464,31 @@ export function SettingsModal({
 
                 <div className="bng-setting-row">
                   <div>
-                    <strong>Animated Skybox Clouds</strong>
-                    <span>Lightweight procedural volumetric cloud shader</span>
+                    <strong>Pluie HD</strong>
+                    <span>Gouttes sur carrosserie et vitres, asphalte mouillé et éclaboussures</span>
+                  </div>
+                  <div className="bng-seg-group">
+                    {([
+                      { id: 'off', label: 'Off' },
+                      { id: 'drizzle', label: 'Bruine' },
+                      { id: 'heavy', label: 'Forte pluie' },
+                    ] as const).map((w) => (
+                      <button
+                        key={w.id}
+                        type="button"
+                        className={`btn ${(settings.weatherMode ?? 'off') === w.id ? 'active' : ''}`}
+                        onClick={() => patch('weatherMode', w.id)}
+                      >
+                        {w.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bng-setting-row">
+                  <div>
+                    <strong>Nuages animés</strong>
+                    <span>Nuages volumétriques légers dans le ciel</span>
                   </div>
                   <button
                     type="button"

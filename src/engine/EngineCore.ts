@@ -144,6 +144,8 @@ export class EngineCore {
   private lightningTimer = 6.5;
   private lightningFlash = 0;
   private nightMode = false;
+  private nightTarget = 0;
+  private nightFactor = 0;
   private headlightsOn = false;
   private readonly dryHemiSky = new Color(0xeef4ff);
   private readonly wetHemiSky = new Color(0x6e8094);
@@ -152,6 +154,8 @@ export class EngineCore {
   private readonly wetSunCol = new Color(0xa9bdd4);
   private readonly nightMoonCol = new Color(0x88a8dc);
   private readonly nightSkyCol = new Color(0x090e1a);
+  private readonly tmpSkyBg = new Color();
+  private readonly tmpLightCol = new Color();
   private readonly pmrem: PMREMGenerator;
   private readonly studioEnvRT: WebGLRenderTarget;
   private readonly cubeRT: WebGLCubeRenderTarget;
@@ -326,12 +330,14 @@ export class EngineCore {
           float r = clamp(uRain, 0.0, 1.0);
           float n = clamp(uNight, 0.0, 1.0);
 
-          // Sunny blue sky -> dark overcast storm slate when raining -> deep starry midnight in Night Mode
+          // Sunny blue sky -> dark overcast storm slate when raining -> warm dusk -> deep starry midnight
+          float dusk = sin(n * 3.14159265) * (1.0 - r * 0.78);
           vec3 zenith = mix(vec3(0.24, 0.46, 0.78), vec3(0.09, 0.12, 0.17), r);
           vec3 horizon = mix(vec3(0.75, 0.84, 0.93), vec3(0.27, 0.31, 0.37), r);
           vec3 ground = mix(vec3(0.45, 0.50, 0.55), vec3(0.16, 0.19, 0.23), r);
           zenith = mix(zenith, vec3(0.015, 0.025, 0.055), n);
           horizon = mix(horizon, vec3(0.045, 0.068, 0.12), n);
+          horizon += vec3(0.55, 0.24, 0.12) * dusk * 0.75;
           ground = mix(ground, vec3(0.015, 0.02, 0.032), n);
           vec3 col = d.y >= 0.0 ? mix(horizon, zenith, pow(y, 0.58)) : mix(horizon, ground, clamp(-d.y * 4.0, 0.0, 1.0));
 
@@ -446,11 +452,12 @@ export class EngineCore {
 
   // ================================================================ weather & time of day
 
-  /** Switch between Day and Night Mode (auto-enables xenon headlights in Night Mode). */
+  /** Switch between Day and Night Mode (smoothly transitions sky, lighting & fog; auto-enables headlights). */
   setNightMode(night: boolean): void {
     const prev = this.nightMode;
     this.nightMode = night;
-    this.skyUniforms.uNight.value = night ? 1 : 0;
+    this.nightTarget = night ? 1 : 0;
+    if (night) this.skyDome.visible = true;
     if (night !== prev) {
       this.setHeadlights(night);
       this.mobileReflBaked = false;
@@ -479,35 +486,38 @@ export class EngineCore {
     return this.headlightsOn;
   }
 
-  /** Unified zero-GC Day / Night / Rain / Lightning lighting & fog mood controller. */
+  /** Unified zero-GC Day / Dusk / Night / Rain / Lightning lighting & fog mood controller. */
   private applyLightingMood(r: number): void {
+    const n = this.nightFactor;
     const flash = this.lightningFlash;
-    if (this.nightMode) {
-      this.dirLight.intensity = 0.34 - r * 0.14 + flash * 1.45;
-      this.dirLight.color.copy(this.nightMoonCol);
-      this.hemiLight.intensity = 0.28 - r * 0.08 + flash * 0.35;
-      this.hemiLight.color.copy(this.nightHemiSky);
-      this.renderer.toneMappingExposure = 0.92;
-      if (this.scene.background instanceof Color) {
-        this.scene.background.copy(this.nightSkyCol);
-      }
-      if (this.scene.fog instanceof FogExp2) {
-        this.scene.fog.color.copy(this.nightSkyCol);
-        this.scene.fog.density = 0.00048 + r * 0.00055;
-      }
-    } else {
-      this.dirLight.intensity = 2.2 - r * 1.42 + flash * 1.65;
-      this.dirLight.color.copy(this.drySunCol).lerp(this.wetSunCol, r);
-      this.hemiLight.intensity = 0.85 - r * 0.30 + flash * 0.45;
-      this.hemiLight.color.copy(this.dryHemiSky).lerp(this.wetHemiSky, r);
-      this.renderer.toneMappingExposure = 1.05 - r * 0.11;
-      if (this.scene.background instanceof Color) {
-        this.scene.background.copy(r > 0.001 ? this.rain.outSkyColor : SKY_COLOR);
-      }
-      if (this.scene.fog instanceof FogExp2) {
-        this.scene.fog.color.copy(r > 0.001 ? this.rain.outSkyColor : SKY_COLOR);
-        this.scene.fog.density = 0.00006 + r * 0.00046;
-      }
+    this.skyUniforms.uNight.value = n;
+    if (n > 0.01) this.skyDome.visible = true;
+
+    const dayDirI = 2.2 - r * 1.42;
+    const nightDirI = 0.34 - r * 0.14;
+    this.dirLight.intensity = dayDirI + (nightDirI - dayDirI) * n + flash * (1.65 - n * 0.2);
+
+    this.tmpLightCol.copy(this.drySunCol).lerp(this.wetSunCol, r).lerp(this.nightMoonCol, n);
+    this.dirLight.color.copy(this.tmpLightCol);
+
+    const dayHemiI = 0.85 - r * 0.30;
+    const nightHemiI = 0.28 - r * 0.08;
+    this.hemiLight.intensity = dayHemiI + (nightHemiI - dayHemiI) * n + flash * (0.45 - n * 0.1);
+
+    this.tmpLightCol.copy(this.dryHemiSky).lerp(this.wetHemiSky, r).lerp(this.nightHemiSky, n);
+    this.hemiLight.color.copy(this.tmpLightCol);
+
+    this.renderer.toneMappingExposure = (1.05 - r * 0.11) * (1 - n) + 0.92 * n;
+
+    this.tmpSkyBg.copy(r > 0.001 ? this.rain.outSkyColor : SKY_COLOR).lerp(this.nightSkyCol, n);
+    if (this.scene.background instanceof Color) {
+      this.scene.background.copy(this.tmpSkyBg);
+    }
+    if (this.scene.fog instanceof FogExp2) {
+      this.scene.fog.color.copy(this.tmpSkyBg);
+      const dayFog = 0.00006 + r * 0.00046;
+      const nightFog = 0.00048 + r * 0.00055;
+      this.scene.fog.density = dayFog + (nightFog - dayFog) * n;
     }
   }
 
@@ -600,6 +610,21 @@ export class EngineCore {
 
   private render(alpha: number, frameDt: number): void {
     Scratch.pool.reset();
+    // Smooth live Day -> Dusk -> Night sky transition (runs even behind Settings so user sees sky change!)
+    if (Math.abs(this.nightFactor - this.nightTarget) > 0.002) {
+      const stepN = Math.min(0.05, Math.max(0.012, frameDt)) * 0.85;
+      if (this.nightFactor < this.nightTarget) {
+        this.nightFactor = Math.min(this.nightTarget, this.nightFactor + stepN);
+      } else {
+        this.nightFactor = Math.max(this.nightTarget, this.nightFactor - stepN);
+      }
+      this.applyLightingMood(this.rain.intensity);
+      if (Math.abs(this.nightFactor - this.nightTarget) <= 0.002) {
+        this.nightFactor = this.nightTarget;
+        this.mobileReflBaked = false;
+      }
+      this.renderDirty = true;
+    }
     if (!this.loop.paused || this.renderDirty) {
       this.skyUniforms.uTime.value += frameDt;
       this.vehicle.render(alpha, frameDt);
@@ -1700,30 +1725,38 @@ export class EngineCore {
       ),
     );
 
-    // Build & bind the NEW vehicle completely BEFORE disposing the currently active vehicle (atomic swap)
+    // Build & bind the NEW vehicle non-blockingly BEFORE disposing the currently active vehicle (atomic swap)
     let nextVehicle: SoftBodyVehicle;
     if (cacheMatches && candidateBindings) {
       onProgress?.('Restoring cached soft-body skinning…', 88);
       await yieldFrame();
       console.time('[FlexWeb Load] skinning weights (cache hit)');
-      nextVehicle = new SoftBodyVehicle(src, this.arena, candidateBindings);
+      nextVehicle = new SoftBodyVehicle(src, this.arena, 'defer');
+      await yieldFrame();
+      await nextVehicle.applyPrecomputedBindingsAsync(candidateBindings);
       console.timeEnd('[FlexWeb Load] skinning weights (cache hit)');
     } else {
       onProgress?.('Computing soft-body skinning weights…', 80);
       await yieldFrame();
       console.time('[FlexWeb Load] skinning weights + adjacency build');
       nextVehicle = new SoftBodyVehicle(src, this.arena, 'defer');
+      await yieldFrame();
       try {
         const bindings = await this.computeSkinningOffThread(nextVehicle);
         if (gen !== this.loadGeneration) {
           nextVehicle.dispose();
           return;
         }
-        nextVehicle.applyPrecomputedBindings(bindings);
+        await nextVehicle.applyPrecomputedBindingsAsync(bindings);
       } catch (workerErr) {
-        console.warn('[FlexWeb Load] Worker skinning unavailable, falling back to main-thread O(V) grid:', workerErr);
+        console.warn('[FlexWeb Load] Worker skinning unavailable, falling back to chunked main-thread O(V) grid:', workerErr);
+        let sliceStart = performance.now();
         for (const part of nextVehicle.getVisualParts()) {
           nextVehicle.deformer.bind(part.mesh, part.group, nextVehicle.restLocal);
+          if (performance.now() - sliceStart > 10) {
+            await yieldFrame();
+            sliceStart = performance.now();
+          }
         }
         nextVehicle.deformer.warmup();
       }
@@ -1768,6 +1801,7 @@ export class EngineCore {
     this.activeCacheKey = cacheKey;
     this.vehicle.solver.substeps = this.loop.maxSubstepsPerFrame;
     this.vehicle.root.visible = true;
+    this.vehicle.headlightsOn = this.headlightsOn;
     if (this.currentSettings) {
       this.vehicle.steeringSensitivity = this.currentSettings.steeringSensitivity;
       this.vehicle.absEnabled = this.currentSettings.absEnabled;
@@ -1791,12 +1825,16 @@ export class EngineCore {
     this.renderDirty = true;
     this.reset(0, 0, 0, 0);
 
-    // Pre-compile shaders & upload vehicle textures via renderer.compile() to eliminate first-frame stutter
+    // Warm up vehicle frame & render without freezing mobile GPUs with heavy synchronous compile stalls
     this.vehicle.render(1, 0);
     this.updateCamera(0.016);
     this.updateShadowLight();
     if (this.showLattice) this.updateLatticeOverlay();
-    this.renderer.compile(this.scene, this.camera);
+    if (!this.isMobilePhone && !this.constrained) {
+      await yieldFrame();
+      this.renderer.compile(this.scene, this.camera);
+    }
+    await yieldFrame();
     this.renderer.render(this.scene, this.camera);
     await yieldFrame();
     if (gen !== this.loadGeneration) return;

@@ -1183,6 +1183,25 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.telemetry.simBytes = this.solver.pool.totalBytes + this.deformer.bytes + this.baseline.bytes;
   }
 
+  /** Non-blocking chunked binding hydration that yields between heavy meshes so the loading UI never freezes. */
+  async applyPrecomputedBindingsAsync(bindings: PrecomputedBindingData[]): Promise<void> {
+    let sliceStart = performance.now();
+    for (let i = 0; i < this.src.parts.length; i++) {
+      const part = this.src.parts[i];
+      if (bindings[i]) {
+        this.deformer.bindPrecomputed(part.mesh, bindings[i]);
+      } else {
+        this.deformer.bind(part.mesh, part.group, this.restLocal);
+      }
+      if (performance.now() - sliceStart > 10) {
+        await new Promise<void>((r) => setTimeout(r, 0));
+        sliceStart = performance.now();
+      }
+    }
+    this.deformer.warmup();
+    this.telemetry.simBytes = this.solver.pool.totalBytes + this.deformer.bytes + this.baseline.bytes;
+  }
+
   /** Returns the visual source parts list (used by EngineCore for Web Worker skinning input). */
   getVisualParts(): CarPart[] {
     return this.src.parts;
@@ -2715,8 +2734,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       );
       this.spoilerGroup.rotation.x = this.spoilerPitch;
     }
-    // Headlights (twin SpotLights that break independently on corner impacts + xenon emissive lenses)
-    const hlOn = this.headlightsOn && !this.engineBroken;
+    // Headlights run independently on 12V battery power (not coupled to engine failure) and break independently on corner impacts
+    const hlOn = this.headlightsOn;
     const hlLActive = hlOn && !this.headlightBrokenL;
     const hlRActive = hlOn && !this.headlightBrokenR;
     this.headlightL.intensity = hlLActive ? 38.0 : 0;
