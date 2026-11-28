@@ -1,0 +1,8 @@
+{
+  "name": "FlexWeb Soft-Body Physics Arena",
+  "short_name": "FlexWeb",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0d0f12",
+  "theme_color": "#0d0f12"
+}

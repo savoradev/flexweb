@@ -103,6 +103,8 @@ export function App(): React.ReactElement {
   const device = useDeviceProfile();
   const isTouchDevice = device.isTouch;
   const isPhone = device.deviceType === 'phone';
+  const isPhoneLandscape = isPhone && !device.isPortrait;
+  const pausedBeforeLandscapeRef = useRef<boolean | null>(null);
   const [diagCollapsed, setDiagCollapsed] = useState(() => device.deviceType === 'phone');
   const [touchEnabled, setTouchEnabled] = useState(
     () => device.isTouch || device.deviceType === 'phone' || device.deviceType === 'tablet',
@@ -115,6 +117,39 @@ export function App(): React.ReactElement {
       setDiagCollapsed(true);
     }
   }, [device.deviceType, device.isTouch]);
+
+  // Attempt native Screen Orientation API portrait lock on mobile phones
+  useEffect(() => {
+    if (!isPhone) return;
+    const lockPortrait = () => {
+      try {
+        const ori = window.screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+        if (ori && typeof ori.lock === 'function') {
+          void ori.lock('portrait-primary').catch(() => { /* ignored on browsers requiring fullscreen */ });
+        }
+      } catch {
+        // unsupported
+      }
+    };
+    lockPortrait();
+    window.addEventListener('pointerdown', lockPortrait, { once: true, passive: true });
+    return () => window.removeEventListener('pointerdown', lockPortrait);
+  }, [isPhone]);
+
+  // Auto-pause simulation when a phone is rotated to landscape, resume when back in portrait
+  useEffect(() => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    if (isPhoneLandscape) {
+      if (pausedBeforeLandscapeRef.current === null) {
+        pausedBeforeLandscapeRef.current = eng.loop.paused;
+      }
+      eng.loop.paused = true;
+    } else if (pausedBeforeLandscapeRef.current !== null) {
+      eng.loop.paused = pausedBeforeLandscapeRef.current;
+      pausedBeforeLandscapeRef.current = null;
+    }
+  }, [isPhoneLandscape]);
 
   const [isFullscreen, setIsFullscreen] = useState(
     () => typeof document !== 'undefined' && Boolean(document.fullscreenElement),
@@ -1176,6 +1211,19 @@ export function App(): React.ReactElement {
             </footer>
           )}
         </>
+      )}
+
+      {isPhoneLandscape && (
+        <div className="mobile-portrait-guard" role="dialog" aria-modal="true" aria-label="Portrait mode required">
+          <svg className="mobile-portrait-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="6" y="2.5" width="12" height="19" rx="2.5" />
+            <line x1="10" y1="18.5" x2="14" y2="18.5" />
+          </svg>
+          <h2 className="mobile-portrait-title">Mode Portrait uniquement</h2>
+          <p className="mobile-portrait-sub">
+            Tournez votre téléphone à la verticale pour continuer à jouer.
+          </p>
+        </div>
       )}
     </div>
   );

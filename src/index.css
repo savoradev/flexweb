@@ -3605,3 +3605,51 @@ html[data-device="desktop"] .hud-cluster-minimal {
   bottom: 16px;
   right: 18px;
 }
+
+/* Mobile Phone Portrait-Only Lock Overlay */
+.mobile-portrait-guard {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+  background: rgba(10, 12, 16, 0.96);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: #f4f6f9;
+  user-select: none;
+  touch-action: none;
+}
+
+.mobile-portrait-icon {
+  width: 56px;
+  height: 56px;
+  color: #f97316;
+  animation: portrait-rotate-hint 2.2s ease-in-out infinite;
+}
+
+.mobile-portrait-title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.mobile-portrait-sub {
+  margin: 0;
+  max-width: 280px;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  color: rgba(244, 246, 249, 0.72);
+}
+
+@keyframes portrait-rotate-hint {
+  0%, 15% { transform: rotate(90deg); }
+  55%, 80% { transform: rotate(0deg); }
+  100% { transform: rotate(90deg); }
+}

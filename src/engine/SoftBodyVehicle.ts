@@ -139,6 +139,7 @@ interface WheelState {
   s: number; sPrev: number; contact: boolean; load: number;
   spin: number; omega: number; steer: number; slip: number;
   bentCamber: number; bentToe: number; detached: boolean;
+  tyreFlat: number; tyreLeaking: number;
   detX: number; detY: number; detZ: number;
   detVx: number; detVy: number; detVz: number;
   detYaw: number;
@@ -1021,6 +1022,7 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         s: this.suspTop, sPrev: this.suspTop, contact: false, load: 0,
         spin: 0, omega: 0, steer: 0, slip: 0,
         bentCamber: 0, bentToe: 0, detached: false,
+        tyreFlat: 0, tyreLeaking: 0,
         detX: 0, detY: 0, detZ: 0, detVx: 0, detVy: 0, detVz: 0, detYaw: 0,
         knuckle, spinner,
       });
@@ -1175,7 +1177,9 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     for (const w of this.wheels) {
       w.s = this.suspTop; w.sPrev = this.suspTop; w.spin = 0; w.omega = 0; w.steer = 0; w.contact = false;
       w.bentCamber = 0; w.bentToe = 0; w.detached = false;
+      w.tyreFlat = 0; w.tyreLeaking = 0;
       w.knuckle.rotation.set(0, 0, 0);
+      w.knuckle.scale.set(1, 1, 1);
     }
     for (const p of this.parts) p.state = 'attached';
     this.doorAngle.fill(0);
@@ -1406,9 +1410,15 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       W.load = 0;
       W.steer = (W.front ? (W.left ? steerFL : steerFR) : 0) + W.bentToe;
       if (Yy < 0.25) { W.s = this.sMax; W.omega *= 1 - 1.5 * h; continue; }
+      // Progressive tire deflation when punctured (accelerates slightly while rolling)
+      if (W.tyreLeaking > 0 && W.tyreFlat < 1) {
+        const rollBoost = 1 + Math.min(1.5, Math.abs(W.omega) * 0.04);
+        W.tyreFlat = Math.min(1, W.tyreFlat + W.tyreLeaking * rollBoost * h);
+      }
+      const effRadius = W.radius * (1 - W.tyreFlat * 0.22);
       S.world!.groundAt(hx, hz, gs);
       const t = (hy - gs.h) / Math.max(0.25, Yy); // distance along -Y to the ground
-      let s = t - W.radius;
+      let s = t - effRadius;
       if (s > this.sMax) {
         W.s = this.sMax;
         W.omega *= 1 - 1.2 * h;
@@ -1427,8 +1437,13 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         // Heavily damped bump stop absorbs energy instead of launching the car back upward
         const bumpDamp = sVel < 0 ? -sVel * 14500 : 0;
         Fs += Math.min(85000, 145000 * bs + bumpDamp);
-        if (avy < -6.0) {
-          const excessV = Math.min(22, -avy - 6.0);
+        if (avy < -5.2) {
+          const excessV = Math.min(22, -avy - 5.2);
+          // Hard curb/landing slam can puncture or blow out the tire
+          if (excessV > 1.2) {
+            W.tyreLeaking = Math.max(W.tyreLeaking, 0.38 + excessV * 0.09);
+            if (excessV > 8.0) W.tyreFlat = Math.min(1, W.tyreFlat + 0.45);
+          }
           // Transfer excess vertical slam impulse directly into wheel arch / lower chassis / subframe soft-body nodes
           const slamForce = excessV * massShare * 18.5;
           if (W.hubNode >= 0) {
@@ -1441,7 +1456,7 @@ export class SoftBodyVehicle implements SubstepForceProvider {
           }
           const slamDmg = Math.min(0.28, excessV * 0.012 * h * 60);
           this.axleDmg[w] = Math.min(1, this.axleDmg[w] + slamDmg);
-          if (excessV + 6.0 > S.lastImpact) S.lastImpact = excessV + 6.0;
+          if (excessV + 5.2 > S.lastImpact) S.lastImpact = excessV + 5.2;
           if (S.lastImpact > S.peakImpact) S.peakImpact = S.lastImpact;
         }
       }
@@ -1460,13 +1475,14 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       const lx = gs.ny * fwz - gs.nz * fwy, ly = gs.nz * fwx - gs.nx * fwz, lz = gs.nx * fwy - gs.ny * fwx;
       const vLong = avx * fwx + avy * fwy + avz * fwz;
       const vLat = avx * lx + avy * ly + avz * lz;
-      // Bent suspension camber reduces effective tyre contact patch grip realistically
+      // Bent suspension camber & flat tire reduce effective tyre contact patch grip realistically
       const camberPenalty = 1 - Math.min(0.32, Math.abs(W.bentCamber) * 0.75);
+      const flatPenalty = 1 - W.tyreFlat * 0.44;
       const hbActive = inp.handbrake > 0 && Math.abs(vForward) > 2.5;
       // Front tyres keep slightly stronger bite during handbrake/drift so the nose stays planted for counter-steering
       const driftFrontBoost = (W.front && hbActive) ? 1.10 : 1.0;
       const wetGrip = 1 - this.wetness * 0.14;
-      const mu = this.tireMu * gs.mu * camberPenalty * driftFrontBoost * wetGrip;
+      const mu = this.tireMu * gs.mu * camberPenalty * flatPenalty * driftFrontBoost * wetGrip;
       const Fmax = mu * Fs;
 
       // Progressive Pacejka lateral slip curve (wider controllable drift sweet spot on rear tyres)
@@ -1520,14 +1536,18 @@ export class SoftBodyVehicle implements SubstepForceProvider {
           Fy += kick;
         }
       }
-      // rolling resistance (dramatically higher if wheel spindle/axle is bent or crushed)
-      Fx -= vLong * (11 + Math.abs(W.bentCamber) * 65 + axDmg * 140);
+      // rolling resistance (dramatically higher if wheel spindle/axle is bent, crushed, or tire is flat!)
+      Fx -= vLong * (11 + Math.abs(W.bentCamber) * 65 + axDmg * 140 + W.tyreFlat * 95);
+      if (W.tyreFlat > 0.15 && Math.abs(vLong) > 0.4) {
+        // Heavy flat-rim rolling drag naturally pulls the vehicle toward the punctured side
+        Fx -= Math.sign(vLong) * W.tyreFlat * Fs * 0.12;
+      }
       // combined-slip friction circle
       const tot = Math.sqrt(Fx * Fx + Fy * Fy);
       if (tot > Fmax && tot > 0) { const k = Fmax / tot; Fx *= k; Fy *= k; }
       totalLongForce += Fx * cs - Fy * sn;
       totalLatForce += Fy * cs + Fx * sn;
-      W.omega = vLong / W.radius;
+      W.omega = vLong / Math.max(0.18, effRadius);
       if (W.driven && Math.abs(driveForce) > Fmax * 0.9 && Math.abs(vLong) < 12) W.omega += Math.sign(driveForce) * 5.5;
       if (!W.front && inp.handbrake > 0) W.omega = 0;
 
@@ -2228,6 +2248,15 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         const rearStrain = (strain(1) + strain(5)) * 0.5;
         W.bentCamber = Math.max(-0.42, Math.min(0.42, (upperStrain - lowerStrain) * 4.5));
         W.bentToe = Math.max(-0.32, Math.min(0.32, (frontStrain - rearStrain) * 3.8 * (W.left ? 1 : -1)));
+        // Wheel-hub impact or bent suspension strain punctures / blows out the tire
+        const suspStrain = Math.abs(lowerStrain) + Math.abs(upperStrain);
+        if ((S.cObstacle[W.hubNode] && S.lastImpact > 8.5) || suspStrain > 0.065 || this.axleDmg[w] > 0.22) {
+          const leakRate = 0.32 + Math.min(1.8, suspStrain * 4.5 + this.axleDmg[w] * 0.9);
+          if (leakRate > W.tyreLeaking) W.tyreLeaking = leakRate;
+          if (S.cObstacle[W.hubNode] && S.lastImpact > 18.0) {
+            W.tyreFlat = Math.min(1, W.tyreFlat + 0.55);
+          }
+        }
       }
     }
 
@@ -2472,13 +2501,22 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         ax += L[i * 3] * q; ay += L[i * 3 + 1] * q; az += L[i * 3 + 2] * q;
       }
       const s = Wh.sPrev + (Wh.s - Wh.sPrev) * alpha;
+      const flatDrop = Wh.tyreFlat * Wh.radius * 0.14;
       Wh.knuckle.position.set(
         ax + Wh.hardLocal[0] - Wh.anchorRest[0],
-        ay + Wh.hardLocal[1] - Wh.anchorRest[1] - s,
+        ay + Wh.hardLocal[1] - Wh.anchorRest[1] - s - flatDrop,
         az + Wh.hardLocal[2] - Wh.anchorRest[2],
       );
-      // Visible bent-axle wheel wobble when spinning
-      const wobble = this.axleDmg[w] > 0.15 ? Math.sin(Wh.spin) * this.axleDmg[w] * 0.14 : 0;
+      // Visual deflated tire squash (flatter vertically, slightly wider sidewall bulge)
+      if (Wh.tyreFlat > 0.005) {
+        Wh.knuckle.scale.set(1 + Wh.tyreFlat * 0.07, 1 - Wh.tyreFlat * 0.15, 1 + Wh.tyreFlat * 0.05);
+      } else {
+        Wh.knuckle.scale.set(1, 1, 1);
+      }
+      // Visible bent-axle wheel wobble + rhythmic rim-thump wobble on flat tires
+      const axleWobble = this.axleDmg[w] > 0.15 ? Math.sin(Wh.spin) * this.axleDmg[w] * 0.14 : 0;
+      const flatWobble = Wh.tyreFlat > 0.12 ? Math.sin(Wh.spin * 2) * Wh.tyreFlat * 0.055 : 0;
+      const wobble = axleWobble + flatWobble;
       Wh.knuckle.rotation.set(0, Wh.steer + wobble * 0.65, (Wh.left ? -Wh.bentCamber : Wh.bentCamber) + wobble);
     }
     if (this.spoilerGroup) {
