@@ -2742,30 +2742,30 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.headlightR.intensity = hlRActive ? 38.0 : 0;
     const anyHeadlightActive = hlLActive || hlRActive;
     if (this.src.headlightMaterials) {
-      const hlEmissive = hlLActive && hlRActive ? 9.0 : anyHeadlightActive ? 4.5 : 0.0;
+      const hlEmissive = hlLActive && hlRActive ? 4.8 : anyHeadlightActive ? 2.4 : 0.08;
       for (let i = 0; i < this.src.headlightMaterials.length; i++) {
         const hm = this.src.headlightMaterials[i];
         hm.emissiveIntensity = hlEmissive;
-        hm.toneMapped = !anyHeadlightActive;
       }
     }
 
     const brakeLit = this.input.brake > 0.05 || this.input.handbrake > 0;
     const speedKmhNow = Math.abs(this.speed) * 3.6;
     const absFlash = this.absActive && speedKmhNow > 25 && Math.sin(this.absPhase * 0.55) > 0;
-    // Much stronger brake & ABS strobe directly from the left & right rear taillights
-    const tailEmissive = absFlash ? 28.0 : brakeLit ? 14.0 : hlOn ? 3.0 : 0.9;
+    // Make the actual red taillight LED lenses blaze brightly (idle -> night running -> brake -> blazing ABS strobe)
+    const tailEmissive = absFlash ? 9.5 : brakeLit ? 4.8 : hlOn ? 1.65 : 0.35;
+    const tailHex = absFlash ? 0xff4d58 : brakeLit ? 0xff1e2c : hlOn ? 0xd80a16 : 0x7a040c;
+    this.src.materials.taillight.emissive.setHex(tailHex);
     this.src.materials.taillight.emissiveIntensity = tailEmissive;
-    this.src.materials.taillight.toneMapped = !brakeLit && !absFlash && !hlOn;
     if (this.src.taillightMaterials) {
       for (let i = 0; i < this.src.taillightMaterials.length; i++) {
         const tm = this.src.taillightMaterials[i];
+        tm.emissive?.setHex(tailHex);
         tm.emissiveIntensity = tailEmissive;
-        tm.toneMapped = !brakeLit && !absFlash && !hlOn;
       }
     }
-    const rearGlow = absFlash ? 12.0 : brakeLit ? 5.2 : hlOn ? 1.1 : 0;
-    const rearDist = absFlash ? 14 : brakeLit ? 9 : 5.5;
+    const rearGlow = absFlash ? 9.5 : brakeLit ? 4.2 : hlOn ? 0.85 : 0;
+    const rearDist = absFlash ? 11 : brakeLit ? 7.5 : 4.5;
     this.taillightL.intensity = rearGlow;
     this.taillightL.distance = rearDist;
     this.taillightR.intensity = rearGlow;
@@ -3653,16 +3653,19 @@ export function fitGLBToVehicleSource(root: Object3D, name: string, paintColor?:
         sm.roughness = 0.42;
         sm.envMapIntensity = 1.25;
       } else if (/Taillights|Red_Light|brake_?light|redglass|ARm4_taillight|ARm4_chmsl/i.test(sm.name)) {
-        sm.emissive?.setHex(0xff1020);
-        sm.emissiveIntensity = 0.85;
+        sm.color?.setHex(0xb80814);
+        sm.emissive?.setHex(0xff0a18);
+        sm.emissiveIntensity = 0.45;
+        sm.toneMapped = false;
         taillightMaterials.push(sm);
       } else if (
-        (/headlight|front_?light|drl|daytime|xenon|led_?front|ARm4_headlight|ARm4_drl|ARm4_beam/i.test(`${sm.name} ${e.path}`) ||
+        (/headlight|hedlight|front_?light|runninglight|drl|daytime|xenon|led_?front|ARm4_headlight|ARm4_drl|ARm4_beam/i.test(`${sm.name} ${e.path}`) ||
           (/Light_D|lamp|light/i.test(sm.name) && e.box.min.z > profile.halfL * 0.45)) &&
         !/tail|rear|brake|rev|turn|signal|glass|lens/i.test(sm.name)
       ) {
         sm.emissive?.setHex(0xeef6ff);
-        sm.emissiveIntensity = 0.25;
+        sm.emissiveIntensity = 0.15;
+        sm.toneMapped = false;
         headlightMaterials.push(sm);
       }
       list[mi].needsUpdate = true;

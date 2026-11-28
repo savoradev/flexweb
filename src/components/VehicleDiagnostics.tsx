@@ -29,34 +29,40 @@ function partColor(state: string | undefined, fallbackDmg: number): string {
 
 const TIRE_NAMES = ['Front Left Tire', 'Front Right Tire', 'Rear Left Tire', 'Rear Right Tire'] as const;
 
-export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = React.memo(
-  ({ telemetry, collapsed, onToggle }) => {
+export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = ({ telemetry, collapsed, onToggle }) => {
     const [alerts, setAlerts] = useState<DamageAlert[]>([]);
     const prevFlagsRef = useRef<Record<string, boolean>>({});
     const alertIdRef = useRef(1);
 
-    // Detect newly broken/failed components and emit short toast messages ABOVE the schematic
+    // Run on every 4 Hz stats update (telemetry is mutated in-place for zero-GC, so never gate on object identity!)
     useEffect(() => {
       if (!telemetry) return;
+      const d = telemetry.damage;
       const m = telemetry.mech;
       const parts = telemetry.parts ?? [];
       const findState = (label: string) => parts.find((p) => p.label === label)?.state ?? 'attached';
 
       const currentFlags: Record<string, { active: boolean; text: string; severity: 'warn' | 'crit' }> = {
+        hood_dmg: { active: d.hood > 0.16 && findState('Hood') === 'attached', text: 'Hood Damaged', severity: 'warn' },
         hood_unlatched: { active: findState('Hood') === 'unlatched', text: 'Hood Unlatched', severity: 'warn' },
         hood_detached: { active: findState('Hood') === 'detached', text: 'Hood Broken', severity: 'crit' },
+        trunk_dmg: { active: d.rear > 0.22 && findState('Trunk') === 'attached', text: 'Trunk Damaged', severity: 'warn' },
         trunk_detached: { active: findState('Trunk') === 'detached', text: 'Trunk Broken', severity: 'crit' },
+        bumperF_dmg: { active: d.front > 0.16 && findState('Front bumper') === 'attached', text: 'Front Bumper Damaged', severity: 'warn' },
         bumperF_detached: { active: findState('Front bumper') === 'detached', text: 'Front Bumper Broken', severity: 'crit' },
         bumperR_detached: { active: findState('Rear bumper') === 'detached', text: 'Rear Bumper Broken', severity: 'crit' },
+        fender_dmg: { active: d.fenders > 0.22, text: 'Side Panel Damaged', severity: 'warn' },
         doorL_broken: { active: findState('Left door') !== 'attached', text: 'Front Left Door Broken', severity: 'crit' },
         doorR_broken: { active: findState('Right door') !== 'attached', text: 'Front Right Door Broken', severity: 'crit' },
         radiator: { active: Boolean(m.radiatorDamaged), text: 'Radiator Damaged', severity: 'warn' },
         coolant: { active: Boolean(m.coolantLeak), text: 'Coolant Leak', severity: 'warn' },
         oil: { active: Boolean(m.oilLeak), text: 'Oil Leak', severity: 'warn' },
         fuel: { active: Boolean(m.fuelLeak), text: 'Fuel Leak', severity: 'warn' },
+        engine_dmg: { active: d.engine > 0.25 && !m.engineBroken, text: 'Engine Damaged', severity: 'warn' },
         overheat: { active: Boolean(m.overheating), text: 'Engine Overheating!', severity: 'crit' },
         engine_broken: { active: Boolean(m.engineBroken), text: 'Engine Broken!', severity: 'crit' },
         out_of_fuel: { active: m.fuelLevel <= 0.001, text: 'Out of Fuel!', severity: 'crit' },
+        steer_dmg: { active: m.steeringDamage > 0.18 && !m.steeringLocked, text: 'Steering Bent', severity: 'warn' },
         steer_lock: { active: Boolean(m.steeringLocked), text: 'Steering Locked', severity: 'crit' },
         hlL_broken: { active: Boolean(m.headlightBrokenL), text: 'Left Headlight Broken', severity: 'warn' },
         hlR_broken: { active: Boolean(m.headlightBrokenR), text: 'Right Headlight Broken', severity: 'warn' },
@@ -66,6 +72,11 @@ export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = React.memo(
         currentFlags[`flat_${i}`] = {
           active: Boolean(m.flatTires?.[i]),
           text: `${TIRE_NAMES[i]} Flat`,
+          severity: 'warn',
+        };
+        currentFlags[`axle_${i}`] = {
+          active: (m.axleDamage?.[i] ?? 0) > 0.28,
+          text: `${TIRE_NAMES[i].replace('Tire', 'Axle')} Damaged`,
           severity: 'warn',
         };
       }
@@ -98,7 +109,7 @@ export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = React.memo(
       if (added.length > 0) {
         setAlerts((old) => [...old.filter((a) => a.expiresAt > now), ...added].slice(-3));
       }
-    }, [telemetry]);
+    });
 
     // Periodic expiry cleanup for active alerts
     useEffect(() => {
@@ -258,5 +269,4 @@ export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = React.memo(
         </section>
       </div>
     );
-  },
-);
+  };
