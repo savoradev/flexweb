@@ -340,6 +340,11 @@ export function App(): React.ReactElement {
     ].filter(Boolean);
     const demoZoneIds = ['wall', 'double-press', 'offset', 'pendulums', 'pole', 'rollers', 'mega-canyon', 'small-overlap'];
 
+    let phase: 'idle' | 'running' = 'idle';
+    let launchTime = 0;
+    let settledSince = 0;
+    let shotTaken = false;
+
     const runCrashCycle = async () => {
       const eng = engineRef.current;
       if (!eng || cancelled || busy || loadingState) return;
@@ -371,8 +376,33 @@ export function App(): React.ReactElement {
           const preset = eng.arena.presets[0];
           if (preset) eng.launchPreset(preset);
         }
+        launchTime = performance.now();
+        settledSince = 0;
+        shotTaken = false;
+        phase = 'running';
+      } catch {
+        // Keep background showcase resilient
+        phase = 'idle';
+      } finally {
+        busy = false;
+      }
+    };
 
-        // Capture arena thumbnail for the PLAY map card 2.0s after launch (post-impact with fluid leaks & steam)
+    const startTimer = window.setTimeout(() => { void runCrashCycle(); }, 450);
+    // Poll every 350ms: only switch to the next crash AFTER the car has impacted AND come to rest!
+    const watcher = window.setInterval(() => {
+      const eng = engineRef.current;
+      if (!eng || cancelled || busy || loadingState) return;
+      if (phase !== 'running') return;
+
+      const now = performance.now();
+      const elapsed = now - launchTime;
+      const tel = eng.vehicle.telemetry;
+      const hasImpacted = tel.peakImpactKmh > 10 || tel.brokenBeams > 0 || tel.damage.front > 0.03 || tel.damage.cabin > 0.03;
+
+      // Capture arena thumbnail 0.8s after impact (with fluid leaks & steam)
+      if (!shotTaken && hasImpacted && elapsed > 1800) {
+        shotTaken = true;
         window.setTimeout(() => {
           if (cancelled || !engineRef.current) return;
           if (screenRef.current !== 'menu' && screenRef.current !== 'maps') return;
@@ -383,20 +413,30 @@ export function App(): React.ReactElement {
               return next.length > 4 ? next.slice(next.length - 4) : next;
             });
           }
-        }, 2000);
-      } catch {
-        // Keep background showcase resilient
-      } finally {
-        busy = false;
+        }, 800);
       }
-    };
 
-    const startTimer = window.setTimeout(() => { void runCrashCycle(); }, 450);
-    const interval = window.setInterval(() => { void runCrashCycle(); }, 6800);
+      // Wait until the car has finished its impact and settled (speed < 4 km/h for 1.8s), or safety max 16s
+      const isSettled = hasImpacted && tel.speedKmh < 4.0 && elapsed > 3200;
+      if (isSettled) {
+        if (settledSince === 0) settledSince = now;
+        if (now - settledSince >= 1800) {
+          phase = 'idle';
+          void runCrashCycle();
+        }
+      } else {
+        settledSince = 0;
+        if (elapsed >= 16000) {
+          phase = 'idle';
+          void runCrashCycle();
+        }
+      }
+    }, 350);
+
     return () => {
       cancelled = true;
       window.clearTimeout(startTimer);
-      window.clearInterval(interval);
+      window.clearInterval(watcher);
     };
   }, [screen, loadingState]);
 
@@ -1246,58 +1286,106 @@ export function App(): React.ReactElement {
             </div>
           )}
 
-          {/* Bottom-Right: Round Motorsport Speedometer with Fuel & Engine Temp Gauges */}
+          {/* Top-Right: Precision Motorsport Round Speedometer with Fuel & Engine Temp Gauges */}
           {settings.showHud && (
             <footer className="hud-speedo-round">
               <div className="speedo-dial-wrap">
-                <svg viewBox="0 0 132 132" className="speedo-svg" aria-hidden="true">
-                  {/* Track arc (240° sweep starting at 150°) */}
+                <svg viewBox="0 0 144 144" className="speedo-svg" aria-hidden="true">
+                  <defs>
+                    <radialGradient id="speedoFaceGrad" cx="50%" cy="42%" r="58%">
+                      <stop offset="0%" stopColor="#161b24" />
+                      <stop offset="100%" stopColor="#090c11" />
+                    </radialGradient>
+                  </defs>
+                  {/* Brushed metallic outer bezel + deep dial face */}
+                  <circle cx="72" cy="72" r="68" fill="url(#speedoFaceGrad)" stroke="rgba(255,255,255,0.16)" strokeWidth="2" />
+                  <circle cx="72" cy="72" r="64" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
+
+                  {/* Background RPM track (240° sweep starting at 150°, r=54 -> arcLen=226.2) */}
                   <circle
-                    cx="66"
-                    cy="66"
-                    r="54"
-                    fill="rgba(9, 12, 17, 0.88)"
-                    stroke="rgba(255, 255, 255, 0.10)"
-                    strokeWidth="7"
-                    strokeDasharray="226.2 340"
-                    strokeLinecap="round"
-                    transform="rotate(150 66 66)"
-                  />
-                  {/* Redline accent zone */}
-                  <circle
-                    cx="66"
-                    cy="66"
+                    cx="72"
+                    cy="72"
                     r="54"
                     fill="none"
-                    stroke="rgba(239, 68, 68, 0.36)"
-                    strokeWidth="7"
-                    strokeDasharray="36 340"
-                    strokeDashoffset="-190"
+                    stroke="rgba(255, 255, 255, 0.09)"
+                    strokeWidth="6.5"
+                    strokeDasharray="226.2 340"
                     strokeLinecap="round"
-                    transform="rotate(150 66 66)"
+                    transform="rotate(150 72 72)"
+                  />
+                  {/* Redline zone (7k–8k RPM) */}
+                  <circle
+                    cx="72"
+                    cy="72"
+                    r="54"
+                    fill="none"
+                    stroke="rgba(239, 68, 68, 0.45)"
+                    strokeWidth="6.5"
+                    strokeDasharray="38 340"
+                    strokeDashoffset="-188.2"
+                    strokeLinecap="round"
+                    transform="rotate(150 72 72)"
                   />
                   {/* Live RPM sweep arc */}
                   <circle
                     ref={hudRpmArcRef}
-                    cx="66"
-                    cy="66"
+                    cx="72"
+                    cy="72"
                     r="54"
                     fill="none"
                     stroke="#f8fafc"
-                    strokeWidth="7"
+                    strokeWidth="6.5"
                     strokeDasharray="226.2 340"
                     strokeDashoffset={(226.2 * (1 - rpmPct / 100)).toFixed(1)}
                     strokeLinecap="round"
-                    transform="rotate(150 66 66)"
+                    transform="rotate(150 72 72)"
                   />
-                  {/* Analog tachometer needle */}
+
+                  {/* Crisp 0–8 RPM graduation ticks & numerals */}
+                  {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+                    const deg = -120 + (n / 8) * 240;
+                    const rad = ((deg - 90) * Math.PI) / 180;
+                    const x1 = 72 + Math.cos(rad) * 47;
+                    const y1 = 72 + Math.sin(rad) * 47;
+                    const x2 = 72 + Math.cos(rad) * 53;
+                    const y2 = 72 + Math.sin(rad) * 53;
+                    const tx = 72 + Math.cos(rad) * 39;
+                    const ty = 72 + Math.sin(rad) * 39 + 2.8;
+                    const isRed = n >= 7;
+                    return (
+                      <g key={n}>
+                        <line
+                          x1={x1.toFixed(1)}
+                          y1={y1.toFixed(1)}
+                          x2={x2.toFixed(1)}
+                          y2={y2.toFixed(1)}
+                          stroke={isRed ? '#ef4444' : 'rgba(241,245,249,0.58)'}
+                          strokeWidth={n % 2 === 0 ? '1.8' : '1.2'}
+                          strokeLinecap="round"
+                        />
+                        <text
+                          x={tx.toFixed(1)}
+                          y={ty.toFixed(1)}
+                          textAnchor="middle"
+                          fill={isRed ? '#f87171' : 'rgba(226,232,240,0.62)'}
+                          fontSize="7.5"
+                          fontWeight="700"
+                          fontFamily="JetBrains Mono, monospace"
+                        >
+                          {n}
+                        </text>
+                      </g>
+                    );
+                  })}
+
+                  {/* Tapered motorsport tachometer needle */}
                   <g
                     ref={hudNeedleRef}
                     className="speedo-needle-group"
                     style={{ transform: `rotate(${(-120 + (rpmPct / 100) * 240).toFixed(1)}deg)` }}
                   >
-                    <line x1="66" y1="66" x2="66" y2="18" stroke="#f97316" strokeWidth="2.4" strokeLinecap="round" />
-                    <circle cx="66" cy="66" r="4.5" fill="#f97316" />
+                    <polygon points="70.6,72 73.4,72 72.5,20 71.5,20" fill="#f97316" />
+                    <circle cx="72" cy="72" r="5.5" fill="#1e2430" stroke="#f97316" strokeWidth="2" />
                   </g>
                 </svg>
 

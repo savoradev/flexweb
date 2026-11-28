@@ -97,6 +97,8 @@ export interface VehicleMechanicalState {
   rearAxleDamage: number;
   axleDamage: [number, number, number, number];
   flatTires: [boolean, boolean, boolean, boolean];
+  headlightBrokenL: boolean;
+  headlightBrokenR: boolean;
   steeringDamage: number;
   steeringLocked: boolean;
   steeringBiasDeg: number;
@@ -229,6 +231,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
   private fuelSeverity = 0;
   /** Headlights toggle (auto-enabled in Night Mode or manually toggled). */
   headlightsOn = false;
+  private headlightBrokenL = false;
+  private headlightBrokenR = false;
   private fuelLevel = 1.0;
   private coolantLevel = 1.0;
   private engineTemp = 88.0;
@@ -236,7 +240,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
   private engineBroken = false;
   private readonly headlightL: SpotLight;
   private readonly headlightR: SpotLight;
-  private readonly brakeGlowLight: PointLight;
+  private readonly taillightL: PointLight;
+  private readonly taillightR: PointLight;
   private readonly radiatorNode: number;
   private readonly oilPanNodeA: number;
   private readonly oilPanNodeB: number;
@@ -1113,9 +1118,17 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.root.add(this.headlightR);
     this.root.add(this.headlightR.target);
 
-    this.brakeGlowLight = new PointLight(0xff1022, 0, 14, 1.5);
-    this.brakeGlowLight.position.set(0, Math.max(0.68, P.beltY(-P.halfL + 0.15) - 0.06), -P.halfL - 0.32);
-    this.root.add(this.brakeGlowLight);
+    // Twin rear taillight PointLights positioned directly at the left & right rear light housings
+    const tlX = P.width * 0.36;
+    const tlY = Math.max(0.68, P.beltY(-P.halfL + 0.14) - 0.03);
+    const tlZ = -P.halfL - 0.08;
+    this.taillightL = new PointLight(0xff1022, 0, 12, 1.5);
+    this.taillightL.position.set(tlX, tlY, tlZ);
+    this.root.add(this.taillightL);
+
+    this.taillightR = new PointLight(0xff1022, 0, 12, 1.5);
+    this.taillightR.position.set(-tlX, tlY, tlZ);
+    this.root.add(this.taillightR);
 
     this.baseline.track(this.solver.rest);
     this.telemetry = {
@@ -1136,6 +1149,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
         rearAxleDamage: 0,
         axleDamage: [0, 0, 0, 0],
         flatTires: [false, false, false, false],
+        headlightBrokenL: false,
+        headlightBrokenR: false,
         steeringDamage: 0,
         steeringLocked: false,
         steeringBiasDeg: 0,
@@ -1223,6 +1238,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.engineTemp = 88.0;
     this.radiatorDamaged = false;
     this.engineBroken = false;
+    this.headlightBrokenL = false;
+    this.headlightBrokenR = false;
     this.misfirePhase = 0;
     this.engineMount.position.set(0, 0, 0);
     this.engineMount.rotation.set(0, 0, 0);
@@ -1636,17 +1653,20 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     this.applyAntiRoll(0, 1, sFL, sFR, Yx, Yy, Yz);
     this.applyAntiRoll(2, 3, sRL, sRR, Yx, Yy, Yz);
 
-    // Realistic G-Force Weight Transfer on Suspension
+    // Realistic G-Force Weight Transfer on Suspension (controlled brake dive without excessive rear lift)
     if (groundedCount >= 2 && Yy > 0.72 && !this.lateralSledActive) {
       const wb = Math.max(2.2, this.profile.frontAxleZ - this.profile.rearAxleZ);
-      const cgH = 0.62;
-      const pitchCouple = Math.max(-2800, Math.min(2800, (totalLongForce * cgH) / wb));
+      const cgH = 0.56;
+      const pitchCouple = Math.max(-920, Math.min(1850, (totalLongForce * cgH) / wb));
       const rollCouple = Math.max(-1350, Math.min(1350, totalLatForce * 0.14));
       if (Math.abs(pitchCouple) > 25 || Math.abs(rollCouple) > 25) {
         for (let w = 0; w < 4; w++) {
           const W = this.wheels[w];
           if (!W.contact || W.detached) continue;
-          const fPitch = W.front ? pitchCouple : -pitchCouple;
+          // Under braking (pitchCouple < 0), compress front mildly and keep rear planted instead of lifting high
+          const fPitch = W.front
+            ? (pitchCouple < 0 ? pitchCouple * 0.85 : pitchCouple)
+            : (pitchCouple < 0 ? -pitchCouple * 0.32 : -pitchCouple * 0.85);
           const fRoll = W.left ? rollCouple : -rollCouple;
           const fVert = fPitch + fRoll;
           const wn = W.nodes, ww = W.weights;
@@ -2026,6 +2046,28 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       if (sev > this.coolantSeverity) this.coolantSeverity = sev;
       this.coolantLeak = true;
       this.radiatorDamaged = true;
+    }
+
+    // 1b. Independent Left & Right Headlight breakage on frontal corner impacts
+    if ((!this.headlightBrokenL || !this.headlightBrokenR) && S.lastImpact > 6.5) {
+      const R = this.restLocal;
+      const hlZMin = this.profile.frontAxleZ + 0.12;
+      for (let i = 0; i < S.nodeCount; i++) {
+        if (!S.cObstacle[i]) continue;
+        const rz = R[i * 3 + 2];
+        if (rz < hlZMin) continue;
+        const rx = R[i * 3];
+        if (rx > 0.18) this.headlightBrokenL = true;
+        else if (rx < -0.18) this.headlightBrokenR = true;
+        else if (S.lastImpact > 14.0) {
+          this.headlightBrokenL = true;
+          this.headlightBrokenR = true;
+        }
+      }
+    }
+    if (frontDmg > 0.42) {
+      this.headlightBrokenL = true;
+      this.headlightBrokenR = true;
     }
 
     // Fuel consumption (normal driving + accelerated drain if fuel tank is leaking)
@@ -2673,36 +2715,42 @@ export class SoftBodyVehicle implements SubstepForceProvider {
       );
       this.spoilerGroup.rotation.x = this.spoilerPitch;
     }
-    // Headlights (twin SpotLights + xenon emissive lenses) & super-bright Brake / ABS strobe lights
-    const hlActive = this.headlightsOn && !this.engineBroken;
-    const hlIntensity = hlActive ? 36.0 : 0;
-    this.headlightL.intensity = hlIntensity;
-    this.headlightR.intensity = hlIntensity;
+    // Headlights (twin SpotLights that break independently on corner impacts + xenon emissive lenses)
+    const hlOn = this.headlightsOn && !this.engineBroken;
+    const hlLActive = hlOn && !this.headlightBrokenL;
+    const hlRActive = hlOn && !this.headlightBrokenR;
+    this.headlightL.intensity = hlLActive ? 38.0 : 0;
+    this.headlightR.intensity = hlRActive ? 38.0 : 0;
+    const anyHeadlightActive = hlLActive || hlRActive;
     if (this.src.headlightMaterials) {
-      const hlEmissive = hlActive ? 9.0 : 0.25;
+      const hlEmissive = hlLActive && hlRActive ? 9.0 : anyHeadlightActive ? 4.5 : 0.0;
       for (let i = 0; i < this.src.headlightMaterials.length; i++) {
         const hm = this.src.headlightMaterials[i];
         hm.emissiveIntensity = hlEmissive;
-        hm.toneMapped = !hlActive;
+        hm.toneMapped = !anyHeadlightActive;
       }
     }
 
     const brakeLit = this.input.brake > 0.05 || this.input.handbrake > 0;
     const speedKmhNow = Math.abs(this.speed) * 3.6;
     const absFlash = this.absActive && speedKmhNow > 25 && Math.sin(this.absPhase * 0.55) > 0;
-    // Much stronger brake & ABS strobe visibility (especially punchy in both day and night)
-    const tailEmissive = absFlash ? 26.0 : brakeLit ? 13.5 : hlActive ? 2.8 : 0.9;
+    // Much stronger brake & ABS strobe directly from the left & right rear taillights
+    const tailEmissive = absFlash ? 28.0 : brakeLit ? 14.0 : hlOn ? 3.0 : 0.9;
     this.src.materials.taillight.emissiveIntensity = tailEmissive;
-    this.src.materials.taillight.toneMapped = !brakeLit && !absFlash && !hlActive;
+    this.src.materials.taillight.toneMapped = !brakeLit && !absFlash && !hlOn;
     if (this.src.taillightMaterials) {
       for (let i = 0; i < this.src.taillightMaterials.length; i++) {
         const tm = this.src.taillightMaterials[i];
         tm.emissiveIntensity = tailEmissive;
-        tm.toneMapped = !brakeLit && !absFlash && !hlActive;
+        tm.toneMapped = !brakeLit && !absFlash && !hlOn;
       }
     }
-    this.brakeGlowLight.intensity = absFlash ? 16.0 : brakeLit ? 6.5 : hlActive ? 1.2 : 0;
-    this.brakeGlowLight.distance = absFlash ? 16 : brakeLit ? 10 : 6;
+    const rearGlow = absFlash ? 12.0 : brakeLit ? 5.2 : hlOn ? 1.1 : 0;
+    const rearDist = absFlash ? 14 : brakeLit ? 9 : 5.5;
+    this.taillightL.intensity = rearGlow;
+    this.taillightL.distance = rearDist;
+    this.taillightR.intensity = rearGlow;
+    this.taillightR.distance = rearDist;
   }
 
   private frameFromRender(W: Float32Array): void {
@@ -2796,6 +2844,8 @@ export class SoftBodyVehicle implements SubstepForceProvider {
     T.mech.flatTires[1] = this.wheels[1].tyreFlat > 0.35;
     T.mech.flatTires[2] = this.wheels[2].tyreFlat > 0.35;
     T.mech.flatTires[3] = this.wheels[3].tyreFlat > 0.35;
+    T.mech.headlightBrokenL = this.headlightBrokenL;
+    T.mech.headlightBrokenR = this.headlightBrokenR;
     T.mech.steeringDamage = this.steeringDmg;
     T.mech.steeringLocked = this.steeringLocked;
     T.mech.steeringBiasDeg = Math.round((this.steeringLocked ? this.steeringLockAngle : this.steeringBias) * (180 / Math.PI));

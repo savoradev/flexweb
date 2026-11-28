@@ -58,6 +58,8 @@ export const VehicleDiagnostics: React.FC<VehicleDiagnosticsProps> = React.memo(
         engine_broken: { active: Boolean(m.engineBroken), text: 'Engine Broken!', severity: 'crit' },
         out_of_fuel: { active: m.fuelLevel <= 0.001, text: 'Out of Fuel!', severity: 'crit' },
         steer_lock: { active: Boolean(m.steeringLocked), text: 'Steering Locked', severity: 'crit' },
+        hlL_broken: { active: Boolean(m.headlightBrokenL), text: 'Left Headlight Broken', severity: 'warn' },
+        hlR_broken: { active: Boolean(m.headlightBrokenR), text: 'Right Headlight Broken', severity: 'warn' },
       };
 
       for (let i = 0; i < 4; i++) {
